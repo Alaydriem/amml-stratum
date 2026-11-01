@@ -36,7 +36,7 @@ fn descriptor_passes_the_manager_checker() {
             descriptor.author.as_str(),
             descriptor.config_path.as_str()
         ),
-        ("alaydriem", "stratum", "Stratum", "0.1.0", "Alaydriem", "config.hcl")
+        ("alaydriem", "stratum", "Stratum", env!("CARGO_PKG_VERSION"), "Alaydriem", "config.hcl")
     );
     assert_eq!(descriptor.input_passthrough, [KEY_ESCAPE]);
     let claims: Vec<_> =

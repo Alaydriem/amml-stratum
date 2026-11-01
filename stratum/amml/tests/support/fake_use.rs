@@ -69,6 +69,8 @@ impl FakeUse {
     const CAN_BE_BUILT_OVER_SLOT: u64 = 2;
     const IS_INTERACTIVE_SLOT: u64 = 3;
     const AS_ITEM_INSTANCE_SLOT: u64 = 4;
+    // past Item::mFullName (0x120, a hash and a 32-byte std::string), which the inventory read takes the name from
+    const ITEM_SIZE: usize = 0x150;
     /// The creative net id of planks, the item the palette's block 7 gives.
     pub const PLANKS_NET_ID: u32 = 41;
     pub const PLANKS_PALETTE_ID: u16 = 7;
@@ -78,7 +80,8 @@ impl FakeUse {
     pub fn new() -> Self {
         NAME_BY_ID.store(true, Ordering::SeqCst);
         for counter in [&STONE_COUNTER, &DIRT_COUNTER, &PLANKS_COUNTER] {
-            let item = Self::bytes(0x10) as usize;
+            // zeroed, so the item has no name
+            let item = Self::bytes(Self::ITEM_SIZE) as usize;
             counter.store(Box::leak(Box::new([item])).as_ptr() as usize, Ordering::SeqCst);
         }
         *STONE_CELL.lock().unwrap() = Some([0, 64, -3]);
