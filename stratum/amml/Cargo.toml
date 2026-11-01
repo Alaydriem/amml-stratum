@@ -1,0 +1,53 @@
+[package]
+name = "stratum-amml"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+publish.workspace = true
+autotests = false
+
+[lib]
+name = "alaydriem_stratum"
+crate-type = ["cdylib", "rlib"]
+
+[features]
+# on the first render frame in a world, builds and draws one stone mesh and looks up one block by NBT
+gate = []
+
+[dependencies]
+amm-client.workspace = true
+amm-core.workspace = true
+amml-game.workspace = true
+amml-msvc.workspace = true
+amml-sdk.workspace = true
+crossbeam-channel.workspace = true
+curia.workspace = true
+egui.workspace = true
+stratum-core.workspace = true
+stratum-ui.workspace = true
+thiserror.workspace = true
+windows = { workspace = true, features = [
+  "Win32_Foundation",
+  "Win32_System_Com",
+  "Win32_System_Threading",
+  "Win32_UI_Input_KeyboardAndMouse",
+  "Win32_UI_Shell",
+  "Win32_UI_Shell_Common",
+  "Win32_UI_WindowsAndMessaging",
+] }
+
+[dev-dependencies]
+amm-abi.workspace = true
+amm-client = { workspace = true, features = ["test-support"] }
+amml-ui.workspace = true
+hcl-rs.workspace = true
+tempfile.workspace = true
+
+[[test]]
+name = "integration"
+path = "tests/integration.rs"
+
+[lints]
+workspace = true

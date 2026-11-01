@@ -1,0 +1,6 @@
+# Every text file is LF in the repository and on every checkout
+* text=auto eol=lf
+# cbindgen writes LF. The generated header and the config it reads stay LF on every checkout, so
+# header-check on a Windows runner (core.autocrlf=true) compares like with like
+shim/include/*.h text eol=lf
+**/cbindgen.toml text eol=lf

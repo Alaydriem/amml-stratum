@@ -1,0 +1,732 @@
+# Messages of the stratum domain, written by amml-i18n-tool. Do not edit.
+msgid ""
+msgstr ""
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"Plural-Forms: nplurals=2; plural=(n != 1);\n"
+"X-Domain: stratum\n"
+
+msgid "Stratum"
+msgstr ""
+
+msgid "ALAYDRIEM"
+msgstr ""
+
+msgid "Close"
+msgstr ""
+
+#, python-brace-format
+msgid "{count} project"
+msgid_plural "{count} projects"
+msgstr[0] ""
+msgstr[1] ""
+
+#, python-brace-format
+msgid "{count} structure"
+msgid_plural "{count} structures"
+msgstr[0] ""
+msgstr[1] ""
+
+#, python-brace-format
+msgid "{count} marker in this world"
+msgid_plural "{count} markers in this world"
+msgstr[0] ""
+msgstr[1] ""
+
+msgid "PROJECTS"
+msgstr ""
+
+msgid "MARKERS IN THIS WORLD"
+msgstr ""
+
+msgid "All structures"
+msgstr ""
+
+msgid "Unsorted"
+msgstr ""
+
+msgid "New project"
+msgstr ""
+
+msgid "No markers in this world yet. Pick a structure, then use Place marker here."
+msgstr ""
+
+msgid "Filter markers"
+msgstr ""
+
+msgid "No markers match"
+msgstr ""
+
+msgctxt "tooltip"
+msgid "Delete marker"
+msgstr ""
+
+#. the block a marker stands on: x, y and z
+#, python-brace-format
+msgid "{x} {y} {z}"
+msgstr ""
+
+msgid "Active"
+msgstr ""
+
+msgid "Missing"
+msgstr ""
+
+msgid "Import .mcstructure"
+msgstr ""
+
+msgid "Or drop files into mods/amml/@alaydriem/stratum/data/import"
+msgstr ""
+
+msgid "The file picker is already open"
+msgstr ""
+
+msgid "The library is read only this session"
+msgstr ""
+
+msgid "Markers are read only this session"
+msgstr ""
+
+msgid "Your library is empty"
+msgstr ""
+
+msgid "Import a .mcstructure file. You can also drop files into mods/amml/@alaydriem/stratum/data/import. New files go to Unsorted."
+msgstr ""
+
+msgid "The library file could not be read"
+msgstr ""
+
+msgid "Changes are not saved this session. Your files on disk are untouched."
+msgstr ""
+
+msgid "The marker file of this world could not be read"
+msgstr ""
+
+msgid "Markers in this world are not saved this session. Your files on disk are untouched."
+msgstr ""
+
+msgid "Big build"
+msgstr ""
+
+msgid "Pieces show as one build"
+msgstr ""
+
+msgid "Structures"
+msgstr ""
+
+msgid "Materials"
+msgstr ""
+
+msgid "Preview"
+msgstr ""
+
+#, python-brace-format
+msgid "{count} piece"
+msgid_plural "{count} pieces"
+msgstr[0] ""
+msgstr[1] ""
+
+#, python-brace-format
+msgid "{blocks} block"
+msgid_plural "{blocks} blocks"
+msgstr[0] ""
+msgstr[1] ""
+
+#, python-brace-format
+msgid "used by {count} marker"
+msgid_plural "used by {count} markers"
+msgstr[0] ""
+msgstr[1] ""
+
+msgid "no markers yet"
+msgstr ""
+
+#, python-brace-format
+msgid "{x} × {y} × {z} · {blocks} blocks"
+msgstr ""
+
+#, python-brace-format
+msgid "New · {x} × {y} × {z} · {blocks} blocks"
+msgstr ""
+
+msgid "Name"
+msgstr ""
+
+msgid "Layers"
+msgstr ""
+
+msgid "Blocks"
+msgstr ""
+
+#. the world position saved in the structure file: x, y and z
+#, python-brace-format
+msgid "origin {x}, {y}, {z}"
+msgstr ""
+
+msgid "no saved origin"
+msgstr ""
+
+msgid "Rename"
+msgstr ""
+
+msgid "Move to project…"
+msgstr ""
+
+msgid "Delete"
+msgstr ""
+
+msgid "Cancel"
+msgstr ""
+
+msgid "Assign to marker…"
+msgstr ""
+
+msgid "Place marker here"
+msgstr ""
+
+msgid "Project actions"
+msgstr ""
+
+#, python-brace-format
+msgid "All {count} structure"
+msgid_plural "All {count} structures"
+msgstr[0] ""
+msgstr[1] ""
+
+#, python-brace-format
+msgid "{name} only"
+msgstr ""
+
+#, python-brace-format
+msgid "{items} item · {blocks} blocks · sorted by count"
+msgid_plural "{items} items · {blocks} blocks · sorted by count"
+msgstr[0] ""
+msgstr[1] ""
+
+msgid "Filter items"
+msgstr ""
+
+msgid "Copy project list"
+msgstr ""
+
+msgid "Copy structure list"
+msgstr ""
+
+msgid "ITEM"
+msgstr ""
+
+msgid "COUNT"
+msgstr ""
+
+msgid "STACKS"
+msgstr ""
+
+#, python-brace-format
+msgid "{count} stack"
+msgid_plural "{count} stacks"
+msgstr[0] ""
+msgstr[1] ""
+
+#, python-brace-format
+msgid "{count} stack + {rest}"
+msgid_plural "{count} stacks + {rest}"
+msgstr[0] ""
+msgstr[1] ""
+
+#, python-brace-format
+msgid "Back to {name}"
+msgstr ""
+
+#, python-brace-format
+msgid "In {project} · {x} × {y} × {z} · {blocks} blocks"
+msgstr ""
+
+#, python-brace-format
+msgid "{x} × {y} × {z}"
+msgstr ""
+
+#, python-brace-format
+msgid "{rest}"
+msgstr ""
+
+#, python-brace-format
+msgid "{item}: {count} ({stacks})"
+msgstr ""
+
+msgid "The list is too large to copy"
+msgstr ""
+
+msgid "Filter the items to make it shorter, then copy again."
+msgstr ""
+
+msgid "Reading the structures"
+msgstr ""
+
+msgid "Try again"
+msgstr ""
+
+msgid "The structure file could not be opened."
+msgstr ""
+
+msgid "The item list could not be read"
+msgstr ""
+
+msgid "This build needs no items"
+msgstr ""
+
+msgid "No item matches the filter"
+msgstr ""
+
+msgid "The pieces line up"
+msgstr ""
+
+msgid "Stratum used the positions saved in each file. The lowest corner is the build origin."
+msgstr ""
+
+msgid "BUILD LAYOUT"
+msgstr ""
+
+msgid "Layout"
+msgstr ""
+
+msgid "From saved positions"
+msgstr ""
+
+msgid "From the grid"
+msgstr ""
+
+msgid "Pieces"
+msgstr ""
+
+msgid "Build size"
+msgstr ""
+
+msgid "Build origin"
+msgstr ""
+
+#, python-brace-format
+msgid "{x} × {y} × {z} · at {at}"
+msgstr ""
+
+msgid "The saved positions do not fit"
+msgstr ""
+
+msgid "Two pieces overlap. Drag each piece into a cell of the grid."
+msgstr ""
+
+msgid "GRID · DROP EACH PIECE INTO A CELL"
+msgstr ""
+
+#, python-brace-format
+msgid "NOT PLACED · {count}"
+msgstr ""
+
+msgid "Drop here"
+msgstr ""
+
+#, python-brace-format
+msgid "Cell {number}"
+msgstr ""
+
+msgid "Seen from above. Cells run west to east, then north to south. Stratum places pieces edge to edge from their sizes."
+msgstr ""
+
+#, python-brace-format
+msgid "{count} piece not placed"
+msgid_plural "{count} pieces not placed"
+msgstr[0] ""
+msgstr[1] ""
+
+#, python-brace-format
+msgid "{x} × {y} × {z} · cell {number}"
+msgstr ""
+
+#, python-brace-format
+msgid "{x} × {y} × {z} · not placed"
+msgstr ""
+
+msgid "Marker placed at your feet"
+msgstr ""
+
+#, python-brace-format
+msgid "{name} at {position}. It is now the active marker. {previous} is off."
+msgstr ""
+
+#, python-brace-format
+msgid "ASSIGN {name} TO"
+msgstr ""
+
+msgid "carries it"
+msgstr ""
+
+#, python-brace-format
+msgid "Delete {name}?"
+msgstr ""
+
+#, python-brace-format
+msgid "{count} marker uses it:"
+msgid_plural "{count} markers use it:"
+msgstr[0] ""
+msgstr[1] ""
+
+#, python-brace-format
+msgid "{marker} (carries {target})"
+msgstr ""
+
+#, python-brace-format
+msgid "{marker} (through {target})"
+msgstr ""
+
+#, python-brace-format
+msgid "They will no longer show {name}."
+msgstr ""
+
+#, python-brace-format
+msgid "{name} has nothing to show"
+msgstr ""
+
+#, python-brace-format
+msgid "Its structure, {target}, is no longer in the library. Assign a structure or a project to it, or delete the marker."
+msgstr ""
+
+msgid "Assign…"
+msgstr ""
+
+msgid "Delete marker"
+msgstr ""
+
+#, python-brace-format
+msgid "{imported} imported. {failed} failed."
+msgstr ""
+
+msgid "New structures are in Unsorted. The reasons are on the right."
+msgstr ""
+
+msgid "Dismiss"
+msgstr ""
+
+#, python-brace-format
+msgid "{count} structure · {new} new from import"
+msgid_plural "{count} structures · {new} new from import"
+msgstr[0] ""
+msgstr[1] ""
+
+msgid "IMPORT RESULTS"
+msgstr ""
+
+msgid "Imported"
+msgstr ""
+
+msgid "Failed"
+msgstr ""
+
+#, python-brace-format
+msgid "{count} file"
+msgid_plural "{count} files"
+msgstr[0] ""
+msgstr[1] ""
+
+msgid "FILE"
+msgstr ""
+
+msgid "REASON"
+msgstr ""
+
+#, python-brace-format
+msgid "Too large. The limit is {mb} MB."
+msgstr ""
+
+msgid "Not a structure file."
+msgstr ""
+
+msgid "Create"
+msgstr ""
+
+msgid "Move"
+msgstr ""
+
+msgid "Assign"
+msgstr ""
+
+#, python-brace-format
+msgid "Rename {name}"
+msgstr ""
+
+#, python-brace-format
+msgid "Move {name}"
+msgstr ""
+
+msgid "Join a world to place a marker"
+msgstr ""
+
+msgid "There is no marker in this world yet"
+msgstr ""
+
+msgid "Its structure or project is no longer in the library. Assign a structure or a project to it, or delete the marker."
+msgstr ""
+
+#, python-brace-format
+msgid "{count} marker has nothing to show"
+msgid_plural "{count} markers have nothing to show"
+msgstr[0] ""
+msgstr[1] ""
+
+msgid "Their structures or projects are no longer in the library. Open the menu of each marker in the sidebar to assign it again or delete it."
+msgstr ""
+
+#, python-brace-format
+msgid "{file} could not be imported. {reason}"
+msgstr ""
+
+#, python-brace-format
+msgid "{file} was not added. {reason}"
+msgstr ""
+
+#, python-brace-format
+msgid "{file} is too large. It is {mb} MB."
+msgstr ""
+
+msgid "Too many files are waiting. Import fewer files at once."
+msgstr ""
+
+#, python-brace-format
+msgid "{file} was imported but could not be removed from the import folder."
+msgstr ""
+
+#, python-brace-format
+msgid "The marker was not changed. {reason}"
+msgstr ""
+
+#, python-brace-format
+msgid "The library was not changed. {reason}"
+msgstr ""
+
+msgid "The structure reader is busy. Try again in a moment."
+msgstr ""
+
+msgid "The ghost memory budget is full. The farthest parts of the build are not shown."
+msgstr ""
+
+msgid "The build has too many different blocks. No ghost is shown for this marker."
+msgstr ""
+
+msgid "The file could not be read."
+msgstr ""
+
+msgid "The item was not found."
+msgstr ""
+
+msgid "The name is empty."
+msgstr ""
+
+#, python-brace-format
+msgid "The name is longer than {max} characters."
+msgstr ""
+
+msgid "The library is full."
+msgstr ""
+
+msgid "This world has the most markers allowed."
+msgstr ""
+
+msgid "The file name is not allowed."
+msgstr ""
+
+msgid "Choose one from the list"
+msgstr ""
+
+msgid "Nothing is unsorted"
+msgstr ""
+
+msgid "New imports wait here until you move them to a project."
+msgstr ""
+
+msgid "No structures yet"
+msgstr ""
+
+msgid "Import .mcstructure files into this project to start."
+msgstr ""
+
+msgid "Some pieces have no saved position. Drag each piece into a cell of the grid."
+msgstr ""
+
+msgid "Some pieces are not on the grid. Drag each piece into a cell."
+msgstr ""
+
+msgid "No pieces to line up"
+msgstr ""
+
+msgid "Move structures into this project to build from them."
+msgstr ""
+
+msgid "The build is too large"
+msgstr ""
+
+msgid "The pieces do not fit in one build. Remove a piece or use smaller ones."
+msgstr ""
+
+#, python-brace-format
+msgid "{name} · {number} of {count}"
+msgstr ""
+
+#, python-brace-format
+msgid "Big build · piece {name}"
+msgstr ""
+
+#, python-brace-format
+msgid "of {count} layer"
+msgid_plural "of {count} layers"
+msgstr[0] ""
+msgstr[1] ""
+
+#, python-brace-format
+msgid "{count} layer"
+msgid_plural "{count} layers"
+msgstr[0] ""
+msgstr[1] ""
+
+#, python-brace-format
+msgid "y {y}"
+msgstr ""
+
+#, python-brace-format
+msgid "y {low} to {high}"
+msgstr ""
+
+msgid "Whole build"
+msgstr ""
+
+msgid "Shown"
+msgstr ""
+
+msgid "Hidden"
+msgstr ""
+
+#, python-brace-format
+msgid "Opacity {number} of {count}"
+msgstr ""
+
+#, python-brace-format
+msgid "{x}, {y}, {z} · {degrees}°"
+msgstr ""
+
+#, python-brace-format
+msgid "{number} of {count}"
+msgstr ""
+
+#, python-brace-format
+msgid "{degrees}°"
+msgstr ""
+
+#, python-brace-format
+msgid "Origin x {value}"
+msgstr ""
+
+#, python-brace-format
+msgid "Origin y {value}"
+msgstr ""
+
+#, python-brace-format
+msgid "Origin z {value}"
+msgstr ""
+
+msgid "Layer"
+msgstr ""
+
+msgid "Opacity"
+msgstr ""
+
+msgid "Show"
+msgstr ""
+
+msgid "Structure"
+msgstr ""
+
+msgid "Move X"
+msgstr ""
+
+msgid "Move Y"
+msgstr ""
+
+msgid "Move Z"
+msgstr ""
+
+msgid "Rotate"
+msgstr ""
+
+#. a world axis
+msgid "X"
+msgstr ""
+
+#. a world axis
+msgid "Y"
+msgstr ""
+
+#. a world axis
+msgid "Z"
+msgstr ""
+
+#. the default key that switches the HUD between quick mode and all controls
+msgid "F10"
+msgstr ""
+
+msgid "All controls"
+msgstr ""
+
+#. the left and right arrow keys
+msgid "← →"
+msgstr ""
+
+#. the up and down arrow keys
+msgid "↑ ↓"
+msgstr ""
+
+msgid "Choose"
+msgstr ""
+
+msgid "Change"
+msgstr ""
+
+msgid "Quick"
+msgstr ""
+
+msgid "Easy place"
+msgstr ""
+
+msgid "Easy place off"
+msgstr ""
+
+#. the state of the easy place switch
+msgid "On"
+msgstr ""
+
+#. the state of the easy place switch
+msgid "Off"
+msgstr ""
+
+#. {block} is the readable name of the item the build needs
+#, python-brace-format
+msgid "No {block} in your inventory"
+msgstr ""
+
+msgid "Nothing to place this block against"
+msgstr ""
+
+msgid "Drawing the preview"
+msgstr ""
+
+msgid "No preview for this structure"
+msgstr ""
+
+#. the time the last preview picture took to draw, in milliseconds
+#, python-brace-format
+msgid "{ms} ms"
+msgstr ""
+
+#. how to move the camera of the 3D preview
+msgid "Drag to turn"
+msgstr ""
+
+#. how to move the camera of the 3D preview
+msgid "Scroll to zoom"
+msgstr ""

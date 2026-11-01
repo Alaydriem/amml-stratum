@@ -1,0 +1,70 @@
+[tasks.preflight]
+description = "Names a missing Rust toolchain or cargo-nextest before a build turns it into an obscure error"
+dir = "{{config_root}}"
+run = [
+  "rustc --version",
+  "cargo --version",
+  "cargo nextest --version",
+]
+
+[tasks.check]
+description = "cargo check, clippy with warnings denied (also with the stratum-amml gate feature), and rustfmt check over the Stratum crates"
+dir = "{{config_root}}"
+run = [
+  "cargo check --workspace --all-targets",
+  "cargo clippy --workspace --all-targets -- -D warnings",
+  "cargo check -p stratum-amml --all-targets --features gate",
+  "cargo clippy -p stratum-amml --all-targets --features gate -- -D warnings",
+  "cargo fmt -p stratum-core -p stratum-ui -p stratum-tools -p stratum-amml --check",
+]
+
+[tasks.test]
+description = "Every workspace test through cargo-nextest, then the stratum-amml tests again with the gate feature"
+dir = "{{config_root}}"
+run = [
+  "cargo nextest run --workspace",
+  "cargo nextest run -p stratum-amml --features gate",
+]
+
+[tasks.bench]
+description = "Every stratum-core Criterion bench, at most 8 build jobs; arguments after the task name filter the benches"
+dir = "{{config_root}}"
+env = { CARGO_BUILD_JOBS = "8" }
+run = "cargo bench -p stratum-core"
+
+[tasks."i18n:extract"]
+description = "Writes stratum/ui/i18n/stratum.pot from the StratumMessage enum"
+dir = "{{config_root}}"
+run = "cargo run -q -p stratum-ui --example stratum_i18n_extract"
+
+[tasks."i18n:check"]
+description = "Fails when stratum/ui/i18n/stratum.pot is out of date with the StratumMessage enum"
+dir = "{{config_root}}"
+run = "cargo run -q -p stratum-ui --example stratum_i18n_extract -- --check"
+
+[tasks.package]
+description = "Builds the AMML mod into dist/@alaydriem/stratum (alaydriem_stratum.dll, amml.hcl and the font licence OFL.txt); --features passes cargo features, for example --features gate"
+dir = "{{config_root}}"
+shell = "bash -c"
+usage = 'flag "--features <features>" help="Cargo features of stratum-amml, comma separated"'
+run = '''
+set -e
+if [ -n "${usage_features:-}" ]; then cargo build --release -p stratum-amml --features "$usage_features"; else cargo build --release -p stratum-amml; fi
+rm -rf dist/alaydriem-stratum dist/@alaydriem/stratum
+mkdir -p dist/@alaydriem/stratum
+cp target/release/alaydriem_stratum.dll dist/@alaydriem/stratum/alaydriem_stratum.dll
+cp stratum/amml/amml.hcl dist/@alaydriem/stratum/amml.hcl
+# the DLL embeds the NordwandMono font from amml-ui; its licence ships beside it
+ui_manifest=$(cargo metadata --format-version 1 --locked | jq -r '.packages[] | select(.name == "amml-ui") | .manifest_path')
+cp "$(dirname "$ui_manifest")/assets/fonts/OFL.txt" dist/@alaydriem/stratum/OFL.txt
+echo "built dist/@alaydriem/stratum (features: ${usage_features:-none})"
+'''
+
+[tasks.samples]
+description = "Writes the synthetic .mcstructure samples into samples/ at the repo root"
+dir = "{{config_root}}"
+run = "cargo run -q --release -p stratum-tools --bin generate_samples -- samples"
+
+[tools]
+# cargo metadata is read with it, to find the amml sources cargo fetched
+jq = "1.8.1"

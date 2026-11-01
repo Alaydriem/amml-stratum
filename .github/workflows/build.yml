@@ -1,0 +1,47 @@
+name: Build
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+
+env:
+  MISE_TRUSTED_CONFIG_PATHS: ${{ github.workspace }}/stratum
+
+defaults:
+  run:
+    working-directory: stratum
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          path: stratum
+
+      - uses: jdx/mise-action@v2
+        with:
+          working_directory: stratum
+
+      - uses: taiki-e/install-action@nextest
+
+      - uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            stratum/target
+          key: cargo-${{ hashFiles('stratum/Cargo.lock', 'stratum/rust-toolchain.toml') }}
+          restore-keys: |
+            cargo-
+
+      - run: mise run check
+      - run: mise run test
+      - run: mise run package
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: alaydriem-stratum-${{ github.sha }}-windows-x64
+          path: stratum/dist/@alaydriem/stratum/

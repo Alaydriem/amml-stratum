@@ -1,0 +1,8 @@
+# Each max-size structure test holds a 192 MiB fixture plus the parsed structure, so they run
+# one at a time instead of side by side.
+[test-groups]
+max-size-structure = { max-threads = 1 }
+
+[[profile.default.overrides]]
+filter = 'package(stratum-core) & (test(accepts_256_x_384_x_256) | test(max_size_structure_resident_bytes_under_56_mib))'
+test-group = 'max-size-structure'

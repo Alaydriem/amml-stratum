@@ -1,0 +1,45 @@
+[package]
+name = "stratum-core"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+publish.workspace = true
+autotests = false
+
+[[test]]
+name = "integration"
+path = "tests/integration.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+serde.workspace = true
+thiserror.workspace = true
+curia.workspace = true
+hcl-rs.workspace = true
+crossbeam-channel.workspace = true
+serde_json.workspace = true
+png.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+criterion.workspace = true
+
+[[bench]]
+name = "ghost_assembler"
+harness = false
+
+[[bench]]
+name = "ghost_ray"
+harness = false
+
+[[bench]]
+name = "preview_render"
+harness = false
+
+[[bench]]
+name = "stratum_controller"
+harness = false
