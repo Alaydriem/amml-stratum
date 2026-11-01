@@ -100,8 +100,8 @@ fn the_hint_names_drag_then_scroll_at_the_bottom_left_of_the_pane() {
 fn the_render_time_shows_in_a_pill_at_the_top_right_of_the_pane() {
     let mut snapshot = SnapshotFixture::library();
     snapshot.projects[0].structures[0].file_name = "tint.mcstructure".to_owned();
-    let samples = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../samples");
-    let mut session = ViewSession::with_preview_files(snapshot, samples);
+    let fixtures = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
+    let mut session = ViewSession::with_preview_files(snapshot, fixtures);
     Card::page(&mut session);
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
     let time = loop {
