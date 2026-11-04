@@ -4,9 +4,9 @@
 
 # Alaydriem's Stratum
 
-[![Release](https://img.shields.io/github/v/release/alaydriem/stratum?include_prereleases)](https://github.com/alaydriem/stratum/releases)
-[![Build](https://img.shields.io/github/actions/workflow/status/alaydriem/stratum/build.yml?branch=master&label=build)](https://github.com/alaydriem/stratum/actions/workflows/build.yml)
-[![License](https://img.shields.io/github/license/alaydriem/stratum)](./LICENSE)
+[![Release](https://img.shields.io/github/v/release/alaydriem/amml-stratum?include_prereleases)](https://github.com/alaydriem/amml-stratum/releases)
+[![Build](https://img.shields.io/github/actions/workflow/status/alaydriem/amml-stratum/build.yml?branch=master&label=build)](https://github.com/alaydriem/amml-stratum/actions/workflows/build.yml)
+[![License](https://img.shields.io/github/license/alaydriem/amml-stratum)](./LICENSE)
 ![Minecraft Bedrock](https://img.shields.io/badge/Minecraft_Bedrock-1.26.51%2C%201.26.60-62B47A)
 [![AMML](https://img.shields.io/badge/AMML-mod-4A90D9)](https://github.com/alaydriem/amml)
 
@@ -14,7 +14,7 @@
 
 A structure helper for Minecraft Bedrock. Import `.mcstructure` files, place a marker in the world, and build over the ghost blocks layer by layer, with a material list for the full build, fully client side as an AMML mod, written in Rust for high performance using Bedrock's native rendering engine.
 
-Stratum is everything Structura and Holoprint should be if they weren't restricted by Minecraft Bedrock's scripting engine -- a full Litematica replacement for Minecraft Bedrock Edition
+Stratum does the job of Structura and Holoprint, without the limits of Bedrock's scripting engine. It runs as an AMML mod and reads and draws through the game itself.
 
 ## Features
 
@@ -28,26 +28,7 @@ Stratum is everything Structura and Holoprint should be if they weren't restrict
 
 ## Installation
 
-Requires:
-
-- the **AMML loader** (26.60.0 or later), which loads the mod into the game. The loader also carries the recipes that
-  find the game addresses Stratum uses (in its `recipes/`). An older loader does not have them: it
-  logs "required entry ... did not resolve" and Stratum stays off. Update the loader first.
-- [Alaydriem's Mod Manager](https://github.com/alaydriem/modmanager), installed as an AMML mod.
-
-Download the zip from the [latest release](https://github.com/alaydriem/stratum/releases/latest) and extract it.
-It holds the folder `@alaydriem/stratum`, with `alaydriem_stratum.dll`, `amml.hcl` and `OFL.txt`. Put that folder in
-the AMML mods folder of the game, so that the files are in `mods/amml/@alaydriem/stratum/`. Then enable the mod in the
-mod manager.
-
-| Stratum | Minecraft Bedrock | AMML loader | Mod Manager |
-| --- | --- | --- | --- |
-| 26.60.0 | 1.26.51, 1.26.60 | 26.60.0 or later | 26.60.x |
-
-**Moving from the LeviLamina build.** At the first start, Stratum copies your old settings and library from
-`mods/alaydriem-stratum/config` and `mods/alaydriem-stratum/data` into `mods/amml/@alaydriem/stratum/`. A folder is
-copied only when its new folder is empty, and only when every file copies; if a file fails, nothing is kept and the
-next start tries again. The old folders are not changed. Delete them only after you check your library in the game.
+Install it with the [AMML launcher](https://github.com/alaydriem/amml/releases/latest). The launcher also installs the AMML loader and Alaydriem's Mod Manager, which this mod needs.
 
 ## Usage
 
@@ -86,6 +67,7 @@ The HUD keys work while no screen is open and a marker is active.
 | Structure | Next / previous structure (only when the marker shows a project) |
 | Move X / Y / Z | Move the marker one block along the axis |
 | Rotate | Rotate the marker |
+| Easy Place | Easy Place on / off |
 
 All keys can be changed on the mod manager's Keybinds page.
 
@@ -108,6 +90,8 @@ Settings are in the mod manager panel and saved to `config.hcl` in the mod's con
 | `import` | `max_file_mb` | `256` | Largest structure file in MB (`1`–`256`) |
 | | `inbox_poll_seconds` | `2.0` | Time between checks of the import folder (`0.5`–`30.0`) |
 | `cache` | `budget_mb` | `128` | Memory for structures read for material lists (`64`–`2048`) |
+| `preview` | `texture_cache` | `1024` | Block textures the 3D preview keeps decoded (`16`–`8192`) |
+| | `max_quads` | `1000000` | Most block faces one 3D preview draws (`10000`–`4000000`); a bigger structure is cut |
 | `ghost` | `miniature` | `true` | Show the full build in miniature at its lowest corner; off shows a structure block there |
 | | `draw_distance` | `0` | Draw distance in chunks (`0`–`64`); `0` uses the game's render distance |
 | | `mesh_budget_mb` | `1024` | Graphics memory the ghost blocks can use (`64`–`8192`) |
@@ -120,7 +104,7 @@ The `library`, `markers`, `import`, `cache` and `ghost.mesh_budget_mb` settings 
 
 ## FAQ
 
-**Can I use it on servers?** Yes. Stratum only draws on your screen and does not place blocks.
+**Can I use it on servers?** Yes, but check the server rules first. Ghost blocks are drawn on your screen only. Easy Place places blocks when you right click, and moves items in your inventory. Turn Easy Place off in the All controls HUD if the server does not allow it.
 
 **Which file types can I import?** `.mcstructure` only, as saved by a structure block or a structure export tool.
 
@@ -128,7 +112,7 @@ The `library`, `markers`, `import`, `cache` and `ghost.mesh_budget_mb` settings 
 
 ## Building
 
-Requires Windows x64, [mise](https://mise.jdx.dev), rustup and [cargo-nextest](https://nexte.st). The `amml` and `modmanager-amml` repos must sit next to this one.
+Requires Windows x64, [mise](https://mise.jdx.dev), rustup and [cargo-nextest](https://nexte.st). Cargo fetches `amml` and `amml-modmanager` from GitHub at tag `26.60.5`. No sibling checkout is needed.
 
 ```powershell
 mise trust

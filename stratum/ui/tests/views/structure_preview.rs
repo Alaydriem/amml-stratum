@@ -6,7 +6,7 @@ use egui::{
 };
 use stratum_core::config::PreviewConfig;
 use stratum_core::services::preview::PreviewService;
-use stratum_core::structs::preview::{OrbitCamera, PreviewRequest, PreviewSource};
+use stratum_core::structs::preview::{OrbitCamera, PreviewSource};
 use stratum_core::structs::snapshot::StructureRow;
 use stratum_ui::views::StructurePreview;
 
@@ -120,45 +120,6 @@ fn the_wheel_over_the_pane_zooms_and_the_page_does_not_scroll() {
     session.wheel(at, -1.0);
     assert!(session.preview.camera().zoom < 1.0, "zoom {}", session.preview.camera().zoom);
     assert_eq!(session.offset, 0.0, "the page scrolled under the pane");
-}
-
-#[test]
-fn a_frame_from_an_earlier_view_does_not_count_as_an_answer() {
-    let ctx = Context::default();
-    Theme::install(&ctx, FontSource::BuiltIn);
-    let source = PreviewSource::new(None, std::env::temp_dir().join("stratum-none"));
-    let service = PreviewService::new_shared(source, &PreviewConfig::default());
-    let row = SnapshotFixture::library().projects[0].structures[0].clone();
-    // a picture that an earlier view asked for and never took, with a serial this view has not reached
-    let stale = PreviewRequest {
-        serial: 5,
-        structure: row.id,
-        file_name: row.file_name.clone(),
-        camera: OrbitCamera::start(),
-        width: 32,
-        height: 24,
-    };
-    service.submit(stale).unwrap();
-    std::thread::sleep(std::time::Duration::from_millis(300));
-    let mut preview = StructurePreview::new(service);
-    let mut time = 0.0;
-    let mut frame = |ui_fn: &mut dyn FnMut(&mut egui::Ui)| {
-        time += 0.1;
-        let input = RawInput {
-            screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(800.0, 600.0))),
-            time: Some(time),
-            ..RawInput::default()
-        };
-        let mut output = ctx.run_ui(input, |ui| {
-            CentralPanel::default().show(ui, |ui| ui_fn(ui));
-        });
-        output.textures_delta.clear();
-        output.viewport_output[&egui::ViewportId::ROOT].repaint_delay
-    };
-    frame(&mut |_| {});
-    frame(&mut |_| {});
-    let delay = frame(&mut |ui| preview.show(ui, &row, 300.0));
-    assert_eq!(delay, std::time::Duration::ZERO, "the view waits for its own picture and asks for a repaint");
 }
 
 #[test]

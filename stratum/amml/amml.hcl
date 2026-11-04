@@ -132,3 +132,17 @@ entries = [
   "ReadOnlyBinaryStream.vtable",
   "ReadOnlyBinaryStream.dtor",
 ]
+
+listing {
+  title       = "Stratum"
+  summary     = "Import .mcstructure files and build over ghost blocks layer by layer."
+  description = <<-EOT
+    Litematica for Bedrock. Everything you wished Structura or HoloPrint could be. Import, manage, and render ghost blocks in the game with a powerful F10 menu, with support for big builds, Easy Place, block opacity, structure position and rotation, and cycling through different structures. Stratum lets you see your ghost blocks out to your maximum render distance without the lag, with performance for millions of blocks.
+  EOT
+  authors     = ["Charles R. Portwood II"]
+  license     = "BSD-3-Clause"
+  source      = "https://github.com/alaydriem/amml-stratum"
+  homepage    = "https://github.com/alaydriem/amml-stratum#readme"
+  tags        = ["structures", "mcstructure", "building", "schematic", "litematica"]
+  icon        = "icon.png"
+}

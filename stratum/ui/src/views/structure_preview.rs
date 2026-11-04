@@ -9,7 +9,7 @@ use amml_ui::widget::MetaSeparator;
 use egui::{Align2, Color32, ColorImage, Event, Rect, Sense, TextureHandle, TextureOptions, Ui, Vec2, pos2, vec2};
 use stratum_core::services::preview::{PreviewRasterizer, PreviewService};
 use stratum_core::structs::library::StructureId;
-use stratum_core::structs::preview::{OrbitCamera, PreviewImage, PreviewRequest};
+use stratum_core::structs::preview::{OrbitCamera, PreviewImage, PreviewRequest, PreviewSerials};
 use stratum_core::structs::snapshot::StructureRow;
 
 use crate::message::StratumMessage;
@@ -30,8 +30,7 @@ pub struct StructurePreview {
     framed: Option<StructureId>,
     // The last request sent: structure, turn and image size.
     sent: Option<(StructureId, OrbitCamera, [u32; 2])>,
-    serial: u64,
-    answered: u64,
+    serials: PreviewSerials,
     render_us: Option<u64>,
     failed: Option<StructureId>,
 }
@@ -62,8 +61,7 @@ impl StructurePreview {
             camera: OrbitCamera::start(),
             framed: None,
             sent: None,
-            serial: 0,
-            answered: 0,
+            serials: PreviewSerials::new(),
             render_us: None,
             failed: None,
         }
@@ -97,7 +95,7 @@ impl StructurePreview {
         let size = Self::image_size(ui, rect);
         self.request(row, size);
         self.receive(ui, row.id);
-        if self.answered < self.serial {
+        if self.serials.waiting() {
             ui.ctx().request_repaint();
         }
         self.paint(ui, rect, row.id);
@@ -137,8 +135,9 @@ impl StructurePreview {
         if self.sent == Some(wanted) {
             return;
         }
-        if self.service.submit(self.request_for(row, size, self.serial + 1)).is_ok() {
-            self.serial += 1;
+        let serial = self.serials.next();
+        if self.service.submit(self.request_for(row, size, serial)).is_ok() {
+            self.serials.sent(serial);
             self.sent = Some(wanted);
         }
     }
@@ -158,14 +157,7 @@ impl StructurePreview {
         let Some(frame) = self.service.take() else {
             return;
         };
-        if frame.serial > self.serial {
-            if let Ok(image) = frame.outcome {
-                self.service.give_back(image.rgba);
-            }
-            return;
-        }
-        self.answered = self.answered.max(frame.serial);
-        if frame.structure != structure {
+        if !self.serials.answer(frame.serial) || frame.structure != structure {
             if let Ok(image) = frame.outcome {
                 self.service.give_back(image.rgba);
             }

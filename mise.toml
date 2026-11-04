@@ -54,6 +54,7 @@ rm -rf dist/alaydriem-stratum dist/@alaydriem/stratum
 mkdir -p dist/@alaydriem/stratum
 cp target/release/alaydriem_stratum.dll dist/@alaydriem/stratum/alaydriem_stratum.dll
 cp stratum/amml/amml.hcl dist/@alaydriem/stratum/amml.hcl
+cp stratum/amml/icon.png dist/@alaydriem/stratum/icon.png
 # the DLL embeds the NordwandMono font from amml-ui; its licence ships beside it
 ui_manifest=$(cargo metadata --format-version 1 --locked | jq -r '.packages[] | select(.name == "amml-ui") | .manifest_path')
 cp "$(dirname "$ui_manifest")/assets/fonts/OFL.txt" dist/@alaydriem/stratum/OFL.txt
