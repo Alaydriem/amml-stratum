@@ -2,7 +2,7 @@ use crate::config::LibraryConfig;
 use crate::errors::LibraryError;
 use crate::structs::layout::GridCell;
 use crate::structs::library::{
-    Library, NameLimit, NewStructure, Project, ProjectId, ProjectKind, StructureEntry, StructureId,
+    Library, NameLimit, NewStructure, Project, ProjectId, ProjectKind, ProjectOrder, StructureEntry, StructureId,
 };
 
 // Holds the library and applies every change to it. Capacity: `max_structures` and
@@ -11,11 +11,14 @@ pub struct LibraryService {
     library: Library,
     config: LibraryConfig,
     dirty: bool,
+    order: ProjectOrder,
 }
 
 impl LibraryService {
     pub fn new(library: Library, config: LibraryConfig) -> Self {
-        Self { library, config, dirty: false }
+        let mut order = ProjectOrder::new();
+        order.rebuild(&library);
+        Self { library, config, dirty: false, order }
     }
 
     pub fn library(&self) -> &Library {
@@ -28,6 +31,10 @@ impl LibraryService {
 
     pub fn mark_saved(&mut self) {
         self.dirty = false;
+    }
+
+    pub fn order(&self) -> &ProjectOrder {
+        &self.order
     }
 
     pub fn add_structure(&mut self, entry: NewStructure) -> Result<StructureId, LibraryError> {
@@ -53,7 +60,7 @@ impl LibraryService {
             world_origin: entry.world_origin,
             grid_cell: None,
         });
-        self.dirty = true;
+        self.touched();
         Ok(StructureId(id))
     }
 
@@ -61,7 +68,7 @@ impl LibraryService {
         let name = Self::clean_name(name)?;
         let index = self.structure_index(id)?;
         self.library.structures[index].display_name = name;
-        self.dirty = true;
+        self.touched();
         Ok(())
     }
 
@@ -71,22 +78,23 @@ impl LibraryService {
             self.project_index(project)?;
         }
         self.library.structures[index].project = project;
-        self.dirty = true;
+        self.touched();
         Ok(())
     }
 
     pub fn set_grid_cell(&mut self, id: StructureId, cell: Option<GridCell>) -> Result<(), LibraryError> {
         let index = self.structure_index(id)?;
         self.library.structures[index].grid_cell = cell;
-        self.dirty = true;
+        self.touched();
         Ok(())
     }
 
     // Returns the removed entry so the caller can remove its file.
     pub fn delete_structure(&mut self, id: StructureId) -> Result<StructureEntry, LibraryError> {
         let index = self.structure_index(id)?;
-        self.dirty = true;
-        Ok(self.library.structures.remove(index))
+        let removed = self.library.structures.remove(index);
+        self.touched();
+        Ok(removed)
     }
 
     pub fn create_project(&mut self, name: &str) -> Result<ProjectId, LibraryError> {
@@ -98,7 +106,7 @@ impl LibraryService {
         let id = self.library.next_project_id;
         self.library.next_project_id = id.checked_add(1).ok_or(full)?;
         self.library.projects.push(Project { id: ProjectId(id), name, kind: ProjectKind::Normal });
-        self.dirty = true;
+        self.touched();
         Ok(ProjectId(id))
     }
 
@@ -106,14 +114,14 @@ impl LibraryService {
         let name = Self::clean_name(name)?;
         let index = self.project_index(id)?;
         self.library.projects[index].name = name;
-        self.dirty = true;
+        self.touched();
         Ok(())
     }
 
     pub fn set_project_kind(&mut self, id: ProjectId, kind: ProjectKind) -> Result<(), LibraryError> {
         let index = self.project_index(id)?;
         self.library.projects[index].kind = kind;
-        self.dirty = true;
+        self.touched();
         Ok(())
     }
 
@@ -126,7 +134,7 @@ impl LibraryService {
                 entry.project = None;
             }
         }
-        self.dirty = true;
+        self.touched();
         Ok(())
     }
 
@@ -136,6 +144,11 @@ impl LibraryService {
             self.library.structures.iter().filter(|entry| entry.project == project).collect();
         found.sort_by_cached_key(|entry| (entry.display_name.to_lowercase(), entry.id));
         found
+    }
+
+    fn touched(&mut self) {
+        self.order.rebuild(&self.library);
+        self.dirty = true;
     }
 
     fn structure_index(&self, id: StructureId) -> Result<usize, LibraryError> {

@@ -6,6 +6,7 @@ pub mod new_structure;
 pub mod project;
 pub mod project_id;
 pub mod project_kind;
+pub mod project_order;
 pub mod structure_entry;
 pub mod structure_id;
 
@@ -15,5 +16,6 @@ pub use new_structure::NewStructure;
 pub use project::Project;
 pub use project_id::ProjectId;
 pub use project_kind::ProjectKind;
+pub use project_order::ProjectOrder;
 pub use structure_entry::StructureEntry;
 pub use structure_id::StructureId;

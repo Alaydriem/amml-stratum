@@ -7,8 +7,8 @@ use amml_ui::text::UiText;
 use amml_ui::tokens::rule::Elevation;
 use amml_ui::tokens::{ColorToken, SpacingToken, color, spacing};
 use amml_ui::widget::{
-    Avatar, AvatarSize, Banner, BannerTone, ButtonKind, Caption, EmptyState, IconButton, ListRow, ListRowResponse,
-    ScrollBar, SectionHeader, Surface, SurfaceLevel, TabRow, Toggle, ValueRow,
+    Avatar, AvatarSize, Banner, BannerTone, ButtonKind, Caption, EmptyState, IconButton, Leading, ListRow,
+    ListRowResponse, ScrollBar, SectionHeader, Surface, SurfaceLevel, TabRow, TextButton, Toggle, ValueRow,
 };
 use egui::{Align, Align2, Id, Key, Layout, Rect, ScrollArea, Sense, Ui, UiBuilder, pos2, vec2};
 use stratum_core::structs::action::{LibraryAction, MaterialScope};
@@ -79,6 +79,7 @@ impl ProjectPage {
             return;
         }
         let blocked = Self::blocked(project, Self::layout_of(snapshot, project));
+        let place_reason = MarkerActions::place_reason(snapshot, MarkerTarget::Project(project.id), blocked.clone());
         let mut placed = None;
         let beside = |ui: &mut Ui| placed = ProjectMenu::show(ui, snapshot, project, blocked, state);
         title.show_beside(ui, beside, |ui| {
@@ -86,6 +87,10 @@ impl ProjectPage {
             ui.add_space(<spacing::L as SpacingToken>::VALUE);
             if ImportButton::build(snapshot, ButtonKind::Secondary).show(ui).clicked() {
                 out.push(LibraryAction::RequestFilePicker(Some(project.id)));
+            }
+            if project.kind == ProjectKind::Normal {
+                ui.add_space(<spacing::L as SpacingToken>::VALUE);
+                Self::place_project_marker(ui, snapshot, project, place_reason, out);
             }
         });
         out.extend(placed);
@@ -392,6 +397,24 @@ impl ProjectPage {
             list_row = list_row.action(button);
         }
         list_row.show(ui)
+    }
+
+    // The button that places a marker cycling through the structures of the project.
+    fn place_project_marker(
+        ui: &mut Ui,
+        snapshot: &LibrarySnapshot,
+        project: &ProjectRow,
+        reason: Option<Text>,
+        out: &mut Vec<LibraryAction>,
+    ) {
+        let mut button = TextButton::new(ButtonKind::Outline, Text::message(StratumMessage::PlaceProjectMarker))
+            .leading(Leading::Icon(Icon::Pin));
+        if let Some(reason) = reason {
+            button = button.enabled(false, DisabledReason::new(reason));
+        }
+        if button.show(ui).clicked() {
+            out.extend(MarkerActions::place(snapshot, MarkerTarget::Project(project.id)));
+        }
     }
 
     // The switch, then its label and help at the left of it. The layout is right to left.

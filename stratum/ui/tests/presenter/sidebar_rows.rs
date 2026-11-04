@@ -1,5 +1,5 @@
-use stratum_core::structs::library::ProjectId;
-use stratum_core::structs::marker::{MarkerId, TargetState};
+use stratum_core::structs::library::{ProjectId, StructureId};
+use stratum_core::structs::marker::{MarkerId, MarkerTarget, TargetState};
 use stratum_core::structs::snapshot::LibrarySnapshot;
 use stratum_ui::presenter::{SidebarRow, SidebarRows};
 
@@ -65,4 +65,50 @@ fn missing_target_marker_row_is_flagged() {
         })
         .collect();
     assert_eq!(flags, [("East wing".to_owned(), false), ("Lighthouse".to_owned(), true)]);
+}
+
+#[test]
+fn cycling_marker_row_carries_its_part() {
+    let mut snapshot = LibrarySnapshot::empty();
+    let mut marker = SnapshotFixture::marker(1, "Bonsai", [1, 64, 1], false, TargetState::Ok);
+    marker.part_name = Some("bonsai-leaves-bark".to_owned());
+    marker.part_position = Some((2, 2));
+    snapshot.markers = vec![marker, SnapshotFixture::marker(2, "Plain", [2, 64, 2], false, TargetState::Ok)];
+    let parts: Vec<_> = SidebarRows::build(&snapshot)
+        .into_iter()
+        .filter_map(|row| match row {
+            SidebarRow::Marker { name, part, .. } => Some((name, part)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        parts,
+        [("Bonsai".to_owned(), Some(("bonsai-leaves-bark".to_owned(), 2, 2))), ("Plain".to_owned(), None)]
+    );
+}
+
+#[test]
+fn project_marker_row_opens_the_structure_it_shows() {
+    let mut snapshot = LibrarySnapshot::empty();
+    let mut cycling = SnapshotFixture::marker(1, "Bonsai", [1, 64, 1], false, TargetState::Ok);
+    cycling.target = MarkerTarget::Project(ProjectId(4));
+    cycling.current = Some(StructureId(7));
+    let mut whole = SnapshotFixture::marker(2, "Castle", [2, 64, 2], false, TargetState::Ok);
+    whole.target = MarkerTarget::Project(ProjectId(5));
+    whole.current = None;
+    snapshot.markers = vec![cycling, whole];
+    let targets: Vec<_> = SidebarRows::build(&snapshot)
+        .into_iter()
+        .filter_map(|row| match row {
+            SidebarRow::Marker { name, target, .. } => Some((name, target)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        targets,
+        [
+            ("Bonsai".to_owned(), MarkerTarget::Structure(StructureId(7))),
+            ("Castle".to_owned(), MarkerTarget::Project(ProjectId(5))),
+        ]
+    );
 }

@@ -15,7 +15,7 @@ use crate::structs::structure::{BlockLayer, BlockState, SparseLayer, Structure, 
 pub struct GhostAssembler;
 
 impl GhostAssembler {
-    // The structures a marker needs loaded: itself for a structure target, the selected structure
+    // The structures a marker needs loaded: itself for a structure target, the current structure
     // of a normal project, every piece of a big build.
     pub fn needed(marker: &Marker, library: &Library) -> Result<Vec<StructureId>, GhostError> {
         match marker.target {
@@ -23,7 +23,7 @@ impl GhostAssembler {
             MarkerTarget::Project(project) => {
                 let (kind, entries) = Self::project_entries(library, project)?;
                 match kind {
-                    ProjectKind::Normal => Self::selected(marker, &entries).map(|entry| vec![entry.id]),
+                    ProjectKind::Normal => Self::current(marker, &entries).map(|id| vec![id]),
                     ProjectKind::BigBuild => {
                         if entries.is_empty() {
                             return Err(GhostError::Layout(LayoutIssue::NoPieces));
@@ -70,9 +70,8 @@ impl GhostAssembler {
                 let (kind, entries) = Self::project_entries(library, project)?;
                 match kind {
                     ProjectKind::Normal => {
-                        let entry = Self::selected(marker, &entries)?;
-                        placed
-                            .push(PlacedStructure { structure: Self::fetch(loaded, entry.id)?, origin: marker.origin });
+                        let id = Self::current(marker, &entries)?;
+                        placed.push(PlacedStructure { structure: Self::fetch(loaded, id)?, origin: marker.origin });
                     }
                     ProjectKind::BigBuild => {
                         let layout = LayoutSolver::solve(&entries).map_err(GhostError::Layout)?;
@@ -108,11 +107,9 @@ impl GhostAssembler {
         Ok((kind, entries))
     }
 
-    // The normal project's selected structure, `view.selected` clamped to the project's structures.
-    fn selected<'a>(marker: &Marker, entries: &[&'a StructureEntry]) -> Result<&'a StructureEntry, GhostError> {
-        let last = entries.len().checked_sub(1).ok_or(GhostError::MissingTarget)?;
-        let index = usize::try_from(marker.view.selected).unwrap_or(usize::MAX).min(last);
-        entries.get(index).copied().ok_or(GhostError::MissingTarget)
+    // The structure a cycling marker shows. The project must hold it.
+    fn current(marker: &Marker, entries: &[&StructureEntry]) -> Result<StructureId, GhostError> {
+        marker.view.current.filter(|id| entries.iter().any(|entry| entry.id == *id)).ok_or(GhostError::MissingTarget)
     }
 
     fn fetch(loaded: &HashMap<StructureId, Arc<Structure>>, id: StructureId) -> Result<Arc<Structure>, GhostError> {

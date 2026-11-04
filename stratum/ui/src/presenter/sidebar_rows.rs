@@ -1,5 +1,5 @@
-use stratum_core::structs::marker::TargetState;
-use stratum_core::structs::snapshot::LibrarySnapshot;
+use stratum_core::structs::marker::{MarkerTarget, TargetState};
+use stratum_core::structs::snapshot::{LibrarySnapshot, MarkerRow};
 
 use super::SidebarRow;
 
@@ -33,13 +33,25 @@ impl SidebarRows {
         rows.extend(markers.into_iter().map(|marker| SidebarRow::Marker {
             id: marker.id,
             name: marker.name.clone(),
-            target: marker.target,
+            target: Self::opens(marker),
             target_name: marker.target_name.clone(),
             origin: marker.origin,
             active: marker.active,
             missing: marker.state == TargetState::Missing,
+            part: Self::part(marker),
         }));
         rows
+    }
+
+    // The page a click on the row opens: the structure on screen for a marker that has one, else its target.
+    fn opens(marker: &MarkerRow) -> MarkerTarget {
+        marker.current.map_or(marker.target, MarkerTarget::Structure)
+    }
+
+    fn part(marker: &MarkerRow) -> Option<(String, u32, u32)> {
+        let name = marker.part_name.clone()?;
+        let (number, count) = marker.part_position?;
+        Some((name, number, count))
     }
 
     fn count(len: usize) -> u32 {

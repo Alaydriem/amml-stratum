@@ -19,7 +19,7 @@ fn store_round_trip_keeps_view_settings() {
     marker.view.layer = 9;
     marker.view.view_mode = ViewMode::Whole;
     marker.view.easy_place = true;
-    marker.view.selected = 5;
+    marker.view.current = Some(StructureId(5));
 
     let store = MarkerStore::new(dir.path().to_path_buf());
     store.save(&changed).unwrap();

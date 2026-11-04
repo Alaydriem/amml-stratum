@@ -308,7 +308,19 @@ impl StratumController {
                 Ok(())
             }),
             LibraryAction::RenameMarker(id, name) => self.change_markers(|markers| markers.rename(id, &name)),
-            LibraryAction::AssignMarker(id, target) => self.change_markers(|markers| markers.assign(id, target)),
+            LibraryAction::AssignMarker(id, target) => {
+                let (library, order) = (self.library.library(), self.library.order());
+                match self.markers.as_mut() {
+                    Some(markers) => match markers.assign(id, target, library, order) {
+                        Ok(()) => {
+                            self.changed = true;
+                            self.reconcile_markers();
+                        }
+                        Err(error) => self.notify(ImportNotice::MarkerRefused(error)),
+                    },
+                    None => self.notify(ImportNotice::NotInWorld),
+                }
+            }
             LibraryAction::DeleteMarker(id) => self.change_markers(|markers| markers.delete(id)),
             LibraryAction::LoadMaterials(scope) => self.load_materials(scope),
         }
@@ -337,11 +349,15 @@ impl StratumController {
         };
         // the layouts of the last snapshot are current: they change only with the library
         let target = self.hud_target(active, &self.snapshot.layouts);
-        let (layers, structures) = (target.layers, target.structures);
+        let layers = target.layers;
+        let order = match active.target {
+            MarkerTarget::Project(project) => self.library.order().of(project),
+            MarkerTarget::Structure(_) => &[],
+        };
         let Some(markers) = self.markers.as_mut() else {
             return;
         };
-        match markers.apply_hud(action, layers, structures) {
+        match markers.apply_hud(action, layers, order) {
             Ok(()) => self.changed = true,
             Err(error) => curia::error!("marker action could not be applied", { error: error.to_string() }),
         }
@@ -624,6 +640,7 @@ impl StratumController {
                 }
             };
             self.markers = Some(MarkerService::new(set, self.config.markers.clone()));
+            self.reconcile_markers();
         }
         self.changed = true;
     }
@@ -726,6 +743,7 @@ impl StratumController {
                 }
                 self.library_changed = true;
                 self.changed = true;
+                self.reconcile_markers();
                 if from_inbox {
                     self.awaiting_save.push(source);
                 }
@@ -796,6 +814,9 @@ impl StratumController {
     }
 
     fn delete_structure(&mut self, id: StructureId) {
+        if let Some(markers) = self.markers.as_mut() {
+            markers.structure_removing(id, self.library.order());
+        }
         match self.library.delete_structure(id) {
             Ok(entry) => {
                 self.cache.evict(id);
@@ -804,6 +825,7 @@ impl StratumController {
                 self.remove_stored_file(&entry.file_name);
                 self.library_changed = true;
                 self.changed = true;
+                self.reconcile_markers();
             }
             Err(error) => self.notify(ImportNotice::LibraryRefused(error)),
         }
@@ -838,11 +860,21 @@ impl StratumController {
             self.notify(ImportNotice::NotInWorld);
             return;
         };
-        match markers.place(name, origin, target) {
+        // A marker for a normal project opens on the first structure by name; reconcile turns it into a project marker.
+        let opens = match target {
+            MarkerTarget::Project(project)
+                if self.library.library().projects.iter().any(|p| p.id == project && p.kind == ProjectKind::Normal) =>
+            {
+                self.library.order().of(project).first().map_or(target, |first| MarkerTarget::Structure(*first))
+            }
+            _ => target,
+        };
+        match markers.place(name, origin, opens) {
             Ok(id) => {
                 if let Err(error) = markers.activate(id) {
                     curia::error!("placed marker could not be activated", { error: error.to_string() });
                 }
+                markers.reconcile(self.library.library(), self.library.order());
                 self.last_place = Some((target, now));
                 self.changed = true;
             }
@@ -870,16 +902,18 @@ impl StratumController {
             }
             MarkerTarget::Project(project) => match library.projects.iter().find(|entry| entry.id == project) {
                 Some(found) if found.kind == ProjectKind::Normal => {
-                    let in_project = |entry: &&StructureEntry| entry.project == Some(project);
-                    let count = library.structures.iter().filter(in_project).count();
-                    let index =
-                        usize::try_from(marker.view.selected).unwrap_or(usize::MAX).min(count.saturating_sub(1));
-                    let total = u32::try_from(count).unwrap_or(u32::MAX);
+                    let order = self.library.order();
+                    let total = u32::try_from(order.of(project).len()).unwrap_or(u32::MAX);
                     target.structures = total.max(1);
-                    if let Some(entry) = library.structures.iter().filter(in_project).nth(index) {
+                    let shown = marker.view.current.and_then(|id| {
+                        let at = order.position(project, id)?;
+                        let entry = library.structures.iter().find(|entry| entry.id == id)?;
+                        Some((at, entry))
+                    });
+                    if let Some((at, entry)) = shown {
                         target.name = &entry.display_name;
                         target.layers = entry.size.y;
-                        target.position = Some((u32::try_from(index + 1).unwrap_or(u32::MAX), total));
+                        target.position = Some((u32::try_from(at + 1).unwrap_or(u32::MAX), total));
                     }
                 }
                 Some(found) => {
@@ -978,8 +1012,18 @@ impl StratumController {
             Ok(()) => {
                 self.library_changed = true;
                 self.changed = true;
+                self.reconcile_markers();
             }
             Err(error) => self.notify(ImportNotice::LibraryRefused(error)),
+        }
+    }
+
+    // Brings the markers in line with the library after the library or the markers changed.
+    fn reconcile_markers(&mut self) {
+        if let Some(markers) = self.markers.as_mut()
+            && markers.reconcile(self.library.library(), self.library.order())
+        {
+            self.changed = true;
         }
     }
 
@@ -1386,17 +1430,50 @@ impl StratumController {
                         library.projects.iter().find(|project| project.id == id).map(|project| project.name.clone())
                     }
                 };
+                let part = self.cycle_part(marker);
+                let current = match marker.target {
+                    MarkerTarget::Project(id)
+                        if library.projects.iter().any(|p| p.id == id && p.kind == ProjectKind::Normal) =>
+                    {
+                        marker.view.current
+                    }
+                    _ => None,
+                };
                 MarkerRow {
                     id: marker.id,
                     name: marker.name.clone(),
                     target: marker.target,
                     target_name: target_name.unwrap_or_default(),
+                    part_name: part.as_ref().map(|(name, _)| (*name).to_owned()),
+                    part_position: part.map(|(_, position)| position),
+                    current,
                     state: markers.target_state(marker.id, library),
                     origin: marker.origin,
                     active: active == Some(marker.id),
                 }
             })
             .collect()
+    }
+
+    // The structure name and the place of a marker that cycles: a normal project of two or more structures
+    // with the current structure in it.
+    fn cycle_part(&self, marker: &Marker) -> Option<(&str, (u32, u32))> {
+        let MarkerTarget::Project(project) = marker.target else {
+            return None;
+        };
+        let library = self.library.library();
+        if !library.projects.iter().any(|entry| entry.id == project && entry.kind == ProjectKind::Normal) {
+            return None;
+        }
+        let list = self.library.order().of(project);
+        if list.len() < 2 {
+            return None;
+        }
+        let current = marker.view.current?;
+        let at = list.iter().position(|id| *id == current)?;
+        let entry = library.structures.iter().find(|entry| entry.id == current)?;
+        let total = u32::try_from(list.len()).unwrap_or(u32::MAX);
+        Some((entry.display_name.as_str(), (u32::try_from(at + 1).unwrap_or(u32::MAX), total)))
     }
 
     fn structures_dir(&self) -> &Path {

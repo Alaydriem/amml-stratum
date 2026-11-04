@@ -1,3 +1,4 @@
+use crate::structs::library::StructureId;
 use crate::structs::marker::{Marker, MarkerId, MarkerTarget, Rotation};
 
 // The parts of a marker that decide which blocks the ghost shows and where. A rename is not one of
@@ -8,7 +9,7 @@ pub(crate) struct BuildSource {
     pub origin: [i32; 3],
     pub rotation: Rotation,
     pub target: MarkerTarget,
-    pub selected: u32,
+    pub current: Option<StructureId>,
 }
 
 impl BuildSource {
@@ -18,12 +19,12 @@ impl BuildSource {
             origin: marker.origin,
             rotation: marker.rotation,
             target: marker.target,
-            selected: marker.view.selected,
+            current: marker.view.current,
         }
     }
 
     // True when both name the same structures, wherever they are placed and however turned.
     pub fn same_blocks(&self, other: &BuildSource) -> bool {
-        self.marker == other.marker && self.target == other.target && self.selected == other.selected
+        self.marker == other.marker && self.target == other.target && self.current == other.current
     }
 }

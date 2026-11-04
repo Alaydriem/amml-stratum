@@ -161,7 +161,7 @@ fn missing_structure_is_reported_not_panicked() {
 }
 
 #[test]
-fn normal_project_shows_the_selected_structure() {
+fn normal_project_marker_needs_its_current_structure() {
     let library = GhostFixture::library(
         ProjectKind::Normal,
         &[(10, [0, 0, 0], [1, 1, 1]), (11, [0, 0, 0], [1, 1, 1]), (12, [0, 0, 0], [1, 1, 1])],
@@ -173,13 +173,17 @@ fn normal_project_shows_the_selected_structure() {
     ]);
     let mut marker = GhostFixture::marker([0, 0, 0], MarkerTarget::Project(ProjectId(1)));
 
-    marker.view.selected = 1;
+    marker.view.current = Some(StructureId(11));
     assert_eq!(GhostAssembler::needed(&marker, &library).unwrap(), vec![StructureId(11)]);
     let build = GhostAssembler::assemble(&marker, &library, &loaded, 1).unwrap();
     assert_eq!(build.palette.entries[0].name, "minecraft:dirt");
 
-    marker.view.selected = 99;
-    assert_eq!(GhostAssembler::needed(&marker, &library).unwrap(), vec![StructureId(12)]);
+    marker.view.current = Some(StructureId(99));
+    assert_eq!(GhostAssembler::needed(&marker, &library), Err(GhostError::MissingTarget));
+    assert_eq!(GhostAssembler::assemble(&marker, &library, &loaded, 1).unwrap_err(), GhostError::MissingTarget);
+
+    marker.view.current = None;
+    assert_eq!(GhostAssembler::needed(&marker, &library), Err(GhostError::MissingTarget));
 }
 
 #[test]

@@ -18,6 +18,7 @@ pub enum SidebarRow {
     Marker {
         id: MarkerId,
         name: String,
+        // The page a click opens: the structure on screen for a marker that has one, else the marker's target.
         target: MarkerTarget,
         // The name of what the marker shows; empty when it is missing.
         target_name: String,
@@ -25,5 +26,7 @@ pub enum SidebarRow {
         origin: [i32; 3],
         active: bool,
         missing: bool,
+        // The structure a cycling marker shows now, its number and the count of the project's structures.
+        part: Option<(String, u32, u32)>,
     },
 }

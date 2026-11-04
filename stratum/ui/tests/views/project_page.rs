@@ -508,3 +508,20 @@ fn the_structure_page_card_keeps_its_footer_inside_the_panel_on_a_short_screen()
     assert!(footer.bottom() <= panel.bottom(), "the footer {footer:?} is outside the panel {panel:?}");
     assert!(footer.top() >= panel.top());
 }
+
+#[test]
+fn normal_project_page_offers_place_project_marker() {
+    let mut session = Scenes::plain(2);
+    let rect = ShapeProbe::text_rect(&session.shapes, "Place project marker").expect("the button is painted");
+    session.click(rect.center());
+    assert!(matches!(
+        session.actions.as_slice(),
+        [LibraryAction::PlaceMarker { target: MarkerTarget::Project(ProjectId(7)), .. }]
+    ));
+}
+
+#[test]
+fn big_build_page_has_no_place_project_marker_button() {
+    let session = Scenes::session(LayoutIssue::TooLarge);
+    assert!(ShapeProbe::text_rect(&session.shapes, "Place project marker").is_none());
+}

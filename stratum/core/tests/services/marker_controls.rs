@@ -1,6 +1,6 @@
 use stratum_core::services::MarkerControls;
 use stratum_core::structs::action::HudAction;
-use stratum_core::structs::library::StructureId;
+use stratum_core::structs::library::{ProjectId, StructureId};
 use stratum_core::structs::marker::{Axis, Marker, MarkerTarget, Rotation, ViewMode};
 
 use crate::support::MarkerFixture;
@@ -22,7 +22,7 @@ impl Scene {
     }
 
     fn press(marker: &mut Marker, action: HudAction, layers: u32) {
-        MarkerControls::apply(marker, action, layers, 1);
+        MarkerControls::apply(marker, action, layers, &[]);
     }
 
     fn shown(marker: &Marker, layers: u32) -> Option<u32> {
@@ -143,7 +143,7 @@ fn toggle_shown_keeps_every_other_setting() {
     let mut marker = Scene::marker();
     marker.view.opacity_step = 5;
     marker.view.layer = 2;
-    marker.view.selected = 1;
+    marker.view.current = Some(StructureId(1));
     let mut expected = marker.clone();
 
     Scene::press(&mut marker, HudAction::ToggleShown, 3);
@@ -171,25 +171,64 @@ fn toggle_easy_place_flips_only_that_switch() {
     assert_eq!(marker, expected);
 }
 
-#[test]
-fn structure_next_wraps_within_the_project() {
-    let mut marker = Scene::marker();
-    let mut seen = Vec::new();
-    for _ in 0..4 {
-        MarkerControls::apply(&mut marker, HudAction::StructureNext, 1, 3);
-        seen.push(marker.view.selected);
+// A normal project marker on the middle structure of three, by name.
+struct Cycle;
+
+impl Cycle {
+    const ORDER: [StructureId; 3] = [StructureId(7), StructureId(3), StructureId(5)];
+
+    fn marker() -> Marker {
+        let mut marker = Scene::marker();
+        marker.target = MarkerTarget::Project(ProjectId(1));
+        marker.view.current = Some(Self::ORDER[0]);
+        marker
     }
-    assert_eq!(seen, [1, 2, 0, 1]);
-    for _ in 0..2 {
-        MarkerControls::apply(&mut marker, HudAction::StructurePrev, 1, 3);
-    }
-    assert_eq!(marker.view.selected, 2);
 }
 
 #[test]
-fn structure_actions_stay_on_the_first_structure_when_there_is_one() {
-    let mut marker = Scene::marker();
-    MarkerControls::apply(&mut marker, HudAction::StructureNext, 1, 1);
-    MarkerControls::apply(&mut marker, HudAction::StructurePrev, 1, 1);
-    assert_eq!(marker.view.selected, 0);
+fn structure_next_steps_by_name_and_wraps() {
+    let mut marker = Cycle::marker();
+    let mut seen = Vec::new();
+    for _ in 0..4 {
+        MarkerControls::apply(&mut marker, HudAction::StructureNext, 1, &Cycle::ORDER);
+        seen.push(marker.view.current);
+    }
+    assert_eq!(seen, [Some(StructureId(3)), Some(StructureId(5)), Some(StructureId(7)), Some(StructureId(3))]);
+}
+
+#[test]
+fn structure_prev_steps_back_and_wraps() {
+    let mut marker = Cycle::marker();
+    let mut seen = Vec::new();
+    for _ in 0..4 {
+        MarkerControls::apply(&mut marker, HudAction::StructurePrev, 1, &Cycle::ORDER);
+        seen.push(marker.view.current);
+    }
+    assert_eq!(seen, [Some(StructureId(5)), Some(StructureId(3)), Some(StructureId(7)), Some(StructureId(5))]);
+}
+
+#[test]
+fn structure_step_keeps_the_layer_of_each_structure() {
+    let mut marker = Cycle::marker();
+    Scene::press(&mut marker, HudAction::LayerUp, 3);
+    Scene::press(&mut marker, HudAction::LayerUp, 3);
+    assert_eq!(marker.view.layer, 1);
+    MarkerControls::apply(&mut marker, HudAction::StructureNext, 3, &Cycle::ORDER);
+    assert_eq!((marker.view.layer, marker.view.view_mode), (0, ViewMode::Whole));
+    MarkerControls::apply(&mut marker, HudAction::StructurePrev, 3, &Cycle::ORDER);
+    assert_eq!((marker.view.layer, marker.view.view_mode), (1, ViewMode::Layer));
+}
+
+#[test]
+fn structure_step_with_one_structure_changes_nothing() {
+    let mut marker = Cycle::marker();
+    let before = marker.view.clone();
+    MarkerControls::apply(&mut marker, HudAction::StructureNext, 1, &Cycle::ORDER[..1]);
+    MarkerControls::apply(&mut marker, HudAction::StructurePrev, 1, &Cycle::ORDER[..1]);
+    assert_eq!(marker.view.current, before.current);
+    assert_eq!(marker.view.parts, before.parts);
+
+    let mut none = Scene::marker();
+    MarkerControls::apply(&mut none, HudAction::StructureNext, 1, &Cycle::ORDER);
+    assert_eq!(none.view.current, None);
 }

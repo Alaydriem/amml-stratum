@@ -1649,15 +1649,17 @@ fn structure_next_wraps_from_the_last_structure_of_a_normal_project() {
     let data = tempfile::tempdir().unwrap();
     let mut controller = HudScene::normal_project(data.path());
 
+    let last = CycleScene::structure(&controller, "c");
     HudScene::press(&mut controller, HudAction::StructureNext, 2);
     let marker = HudScene::saved(controller, data.path());
-    assert_eq!(marker.view.selected, 2);
+    assert_eq!(marker.view.current, Some(last));
 
     let data = tempfile::tempdir().unwrap();
     let mut controller = HudScene::normal_project(data.path());
+    let first = CycleScene::structure(&controller, "a");
     HudScene::press(&mut controller, HudAction::StructureNext, 3);
     let marker = HudScene::saved(controller, data.path());
-    assert_eq!(marker.view.selected, 0);
+    assert_eq!(marker.view.current, Some(first));
 }
 
 #[test]
@@ -1665,10 +1667,11 @@ fn structure_prev_wraps_from_the_first_structure_of_a_normal_project() {
     let data = tempfile::tempdir().unwrap();
     let mut controller = HudScene::normal_project(data.path());
 
+    let last = CycleScene::structure(&controller, "c");
     HudScene::press(&mut controller, HudAction::StructurePrev, 1);
 
     let marker = HudScene::saved(controller, data.path());
-    assert_eq!(marker.view.selected, 2);
+    assert_eq!(marker.view.current, Some(last));
 }
 
 #[test]
@@ -1689,10 +1692,11 @@ fn layer_up_reaches_whole_after_the_top_of_the_selected_structure() {
     // c is 5 layers tall: five presses show layer 4, a sixth shows Whole.
     let data = tempfile::tempdir().unwrap();
     let mut controller = HudScene::normal_project(data.path());
+    let last = CycleScene::structure(&controller, "c");
     HudScene::press(&mut controller, HudAction::StructureNext, 2);
     HudScene::press(&mut controller, HudAction::LayerUp, 5);
     let marker = HudScene::saved(controller, data.path());
-    assert_eq!(marker.view.selected, 2);
+    assert_eq!(marker.view.current, Some(last));
     assert_eq!(marker.view.shown_layer(5), Some(4));
 
     let data = tempfile::tempdir().unwrap();
@@ -1743,7 +1747,7 @@ fn structure_keys_do_not_move_the_selection_of_a_big_build() {
     HudScene::press(&mut controller, HudAction::StructureNext, 2);
 
     let marker = HudScene::saved(controller, data.path());
-    assert_eq!(marker.view.selected, 0);
+    assert_eq!(marker.view.current, None);
 }
 
 #[test]
@@ -1848,6 +1852,14 @@ fn a_normal_project_of_two_structures_has_structures_to_step_through() {
 fn a_normal_project_of_one_structure_has_none() {
     let data = tempfile::tempdir().unwrap();
     let controller = RowScene::marked(data.path(), 1, ProjectKind::Normal);
+
+    assert!(!controller.hud_has_structures());
+}
+
+#[test]
+fn empty_normal_project_marker_has_no_structure_control() {
+    let data = tempfile::tempdir().unwrap();
+    let controller = RowScene::marked(data.path(), 0, ProjectKind::Normal);
 
     assert!(!controller.hud_has_structures());
 }
@@ -2328,4 +2340,190 @@ fn a_place_for_another_target_at_once_is_a_new_marker() {
     let targets: Vec<MarkerTarget> = controller.snapshot().markers.iter().map(|row| row.target).collect();
     assert_eq!(targets.len(), 2);
     assert!(targets.contains(&structure) && targets.contains(&project));
+}
+
+// A normal project "Bonsai Tree" whose structures are imported in the given order.
+struct CycleScene;
+
+impl CycleScene {
+    fn start(data: &std::path::Path, names: &[&str]) -> StratumController {
+        let mut controller = ControllerHarness::start(data);
+        for (index, name) in names.iter().enumerate() {
+            let height = i32::try_from(index).unwrap_or(0) + 2;
+            RowScene::import_sized(&mut controller, data, name, StructureFixture::full([1, height, 1]));
+        }
+        controller.apply(LibraryAction::CreateProject("Bonsai Tree".to_string()));
+        let project = controller.snapshot().projects[0].id;
+        for row in controller.snapshot().unsorted.clone() {
+            controller.apply(LibraryAction::MoveStructure(row.id, Some(project)));
+        }
+        controller.tick(&Frames::in_world("W1", 1.0));
+        controller
+    }
+
+    fn structure(controller: &StratumController, name: &str) -> StructureId {
+        let snapshot = controller.snapshot();
+        let rows = snapshot.projects.iter().flat_map(|project| project.structures.iter());
+        rows.filter(|row| row.name == name).map(|row| row.id).next().unwrap()
+    }
+
+    fn key(controller: &mut StratumController, key: HudKey, times: usize) {
+        for _ in 0..times {
+            controller.hud_key(key);
+        }
+    }
+}
+
+#[test]
+fn placing_from_a_structure_row_in_a_normal_project_cycles() {
+    let data = tempfile::tempdir().unwrap();
+    let mut controller = CycleScene::start(data.path(), &["bonsai-leaves-bark", "bonsai-bark-only"]);
+    let bark = CycleScene::structure(&controller, "bonsai-bark-only");
+
+    controller.apply(LibraryAction::PlaceMarker { name: "Home".to_string(), target: MarkerTarget::Structure(bark) });
+
+    assert!(controller.hud_has_structures());
+    let hud = controller.snapshot().hud.clone().unwrap();
+    assert_eq!(hud.position, Some((1, 2)));
+    assert_eq!(hud.target_name, "bonsai-bark-only");
+}
+
+#[test]
+fn placing_for_the_project_opens_on_the_first_structure_by_name() {
+    let data = tempfile::tempdir().unwrap();
+    let mut controller = CycleScene::start(data.path(), &["bonsai-leaves-bark", "bonsai-bark-only"]);
+    let project = controller.snapshot().projects[0].id;
+
+    controller.apply(LibraryAction::PlaceMarker { name: "Home".to_string(), target: MarkerTarget::Project(project) });
+
+    let hud = controller.snapshot().hud.clone().unwrap();
+    assert_eq!(hud.target_name, "bonsai-bark-only");
+    assert_eq!(hud.position, Some((1, 2)));
+}
+
+#[test]
+fn full_mode_structure_control_cycles_by_name_and_keeps_layers() {
+    let data = tempfile::tempdir().unwrap();
+    let mut controller = CycleScene::start(data.path(), &["bonsai-leaves-bark", "bonsai-bark-only"]);
+    let bark = CycleScene::structure(&controller, "bonsai-bark-only");
+    controller.apply(LibraryAction::PlaceMarker { name: "Home".to_string(), target: MarkerTarget::Structure(bark) });
+
+    CycleScene::key(&mut controller, HudKey::Mode, 1);
+    CycleScene::key(&mut controller, HudKey::Right, 3);
+    assert_eq!(controller.hud_state().control, HudControl::Structure);
+    controller.apply_hud(HudAction::LayerUp);
+    controller.apply_hud(HudAction::LayerUp);
+    controller.tick(&Frames::in_world("W1", 2.0));
+    let hud = controller.snapshot().hud.clone().unwrap();
+    assert_eq!((hud.target_name.as_str(), hud.layer), ("bonsai-bark-only", Some(1)));
+
+    CycleScene::key(&mut controller, HudKey::Up, 1);
+    controller.tick(&Frames::in_world("W1", 2.0));
+    let hud = controller.snapshot().hud.clone().unwrap();
+    assert_eq!((hud.target_name.as_str(), hud.position, hud.layer), ("bonsai-leaves-bark", Some((2, 2)), None));
+
+    CycleScene::key(&mut controller, HudKey::Up, 1);
+    controller.tick(&Frames::in_world("W1", 2.0));
+    let hud = controller.snapshot().hud.clone().unwrap();
+    assert_eq!((hud.target_name.as_str(), hud.layer), ("bonsai-bark-only", Some(1)));
+}
+
+#[test]
+fn renaming_a_structure_keeps_the_marker_on_it() {
+    let data = tempfile::tempdir().unwrap();
+    let mut controller = CycleScene::start(data.path(), &["bonsai-leaves-bark", "bonsai-bark-only"]);
+    let bark = CycleScene::structure(&controller, "bonsai-bark-only");
+    controller.apply(LibraryAction::PlaceMarker { name: "Home".to_string(), target: MarkerTarget::Structure(bark) });
+
+    controller.apply(LibraryAction::RenameStructure(bark, "zzz-bark".to_string()));
+
+    let hud = controller.snapshot().hud.clone().unwrap();
+    assert_eq!(hud.target_name, "zzz-bark");
+    assert_eq!(hud.position, Some((2, 2)), "the renamed structure now sorts last");
+}
+
+#[test]
+fn deleting_the_shown_structure_moves_the_marker_to_the_next() {
+    let data = tempfile::tempdir().unwrap();
+    let mut controller = CycleScene::start(data.path(), &["bonsai-trunk", "bonsai-leaves-bark", "bonsai-bark-only"]);
+    let bark = CycleScene::structure(&controller, "bonsai-bark-only");
+    controller.apply(LibraryAction::PlaceMarker { name: "Home".to_string(), target: MarkerTarget::Structure(bark) });
+
+    controller.apply(LibraryAction::DeleteStructure(bark));
+
+    let snapshot = controller.snapshot();
+    let hud = snapshot.hud.clone().unwrap();
+    assert_eq!((hud.target_name.as_str(), hud.position), ("bonsai-leaves-bark", Some((1, 2))));
+    assert_eq!(snapshot.markers[0].state, TargetState::Ok);
+}
+
+#[test]
+fn deleting_the_last_structure_of_the_project_makes_the_marker_missing() {
+    let data = tempfile::tempdir().unwrap();
+    let mut controller = CycleScene::start(data.path(), &["bonsai-bark-only"]);
+    let bark = CycleScene::structure(&controller, "bonsai-bark-only");
+    controller.apply(LibraryAction::PlaceMarker { name: "Home".to_string(), target: MarkerTarget::Structure(bark) });
+
+    controller.apply(LibraryAction::DeleteStructure(bark));
+
+    assert_eq!(controller.snapshot().markers[0].state, TargetState::Missing);
+}
+
+#[test]
+fn a_legacy_marker_file_opens_on_its_old_structure() {
+    let data = tempfile::tempdir().unwrap();
+    let mut controller = CycleScene::start(data.path(), &["bonsai-leaves-bark", "bonsai-bark-only"]);
+    let project = controller.snapshot().projects[0].id;
+    controller.shutdown();
+    drop(controller);
+
+    // the old shape: a project marker with a raw library index and no current structure
+    let key = WorldKey { world: "W1".to_string(), dimension: 0 };
+    let path = MarkerStore::new(data.path().join("markers")).path_of(&key);
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    let text = format!(
+        concat!(
+            "world = {{ \"world\" = \"W1\", \"dimension\" = 0 }}\n",
+            "markers = [ {{ \"id\" = 1, \"name\" = \"m\", \"origin\" = [0, 64, 0], \"rotation\" = \"R0\", ",
+            "\"target\" = {{ Project = {} }}, \"view\" = {{ \"shown\" = true, \"opacity_step\" = 2, \"layer\" = 0, ",
+            "\"view_mode\" = \"Whole\", \"easy_place\" = false, \"selected\" = 0 }} }} ]\n",
+            "active = 1\n",
+            "next_id = 2\n"
+        ),
+        project.0
+    );
+    std::fs::write(&path, text).unwrap();
+
+    let mut controller = ControllerHarness::start(data.path());
+    controller.tick(&Frames::in_world("W1", 1.0));
+
+    let hud = controller.snapshot().hud.clone().unwrap();
+    assert_eq!(hud.target_name, "bonsai-leaves-bark", "index 0 of the import order, not the first by name");
+    assert_eq!(hud.position, Some((2, 2)));
+}
+
+#[test]
+fn marker_row_shows_project_and_part() {
+    let data = tempfile::tempdir().unwrap();
+    let mut controller = CycleScene::start(data.path(), &["bonsai-leaves-bark", "bonsai-bark-only"]);
+    let bark = CycleScene::structure(&controller, "bonsai-bark-only");
+    controller.apply(LibraryAction::PlaceMarker { name: "Home".to_string(), target: MarkerTarget::Structure(bark) });
+    controller.apply_hud(HudAction::StructureNext);
+    controller.tick(&Frames::in_world("W1", 2.0));
+
+    let row = controller.snapshot().markers[0].clone();
+    assert_eq!(row.target_name, "Bonsai Tree");
+    assert_eq!(row.part_name.as_deref(), Some("bonsai-leaves-bark"));
+    assert_eq!(row.part_position, Some((2, 2)));
+}
+
+#[test]
+fn marker_row_of_a_single_structure_has_no_part() {
+    let data = tempfile::tempdir().unwrap();
+    let mut controller = CycleScene::start(data.path(), &["bonsai-bark-only"]);
+    let bark = CycleScene::structure(&controller, "bonsai-bark-only");
+    controller.apply(LibraryAction::PlaceMarker { name: "Home".to_string(), target: MarkerTarget::Structure(bark) });
+
+    let row = controller.snapshot().markers[0].clone();
+    assert_eq!((row.part_name, row.part_position), (None, None));
 }

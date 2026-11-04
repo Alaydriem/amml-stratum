@@ -176,3 +176,30 @@ fn grid_cell_is_set_and_cleared() {
     assert_eq!(svc.library().structures[0].grid_cell, None);
     assert_eq!(svc.set_grid_cell(StructureId(99), None), Err(LibraryError::NotFound));
 }
+
+#[test]
+fn order_follows_rename_move_and_delete() {
+    let mut svc = ServiceFactory::with_capacity(10, 10);
+    let project = svc.create_project("Castle").unwrap();
+    let mut ids = Vec::new();
+    for name in ["m", "z"] {
+        let mut new = NewStructureFixture::named(name);
+        new.project = Some(project);
+        ids.push(svc.add_structure(new).unwrap());
+    }
+    assert_eq!(svc.order().of(project), [ids[0], ids[1]]);
+
+    svc.rename_structure(ids[1], "a").unwrap();
+    assert_eq!(svc.order().of(project), [ids[1], ids[0]]);
+
+    svc.move_structure(ids[1], None).unwrap();
+    assert_eq!(svc.order().of(project), [ids[0]]);
+    svc.move_structure(ids[1], Some(project)).unwrap();
+    assert_eq!(svc.order().of(project), [ids[1], ids[0]]);
+
+    svc.delete_structure(ids[1]).unwrap();
+    assert_eq!(svc.order().of(project), [ids[0]]);
+
+    svc.delete_project(project).unwrap();
+    assert!(svc.order().of(project).is_empty());
+}

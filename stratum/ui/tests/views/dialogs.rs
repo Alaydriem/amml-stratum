@@ -1,7 +1,7 @@
 use egui::{Key, Pos2};
 use stratum_core::structs::action::LibraryAction;
 use stratum_core::structs::library::{ProjectId, ProjectKind, StructureId};
-use stratum_core::structs::marker::{MarkerId, MarkerTarget};
+use stratum_core::structs::marker::{MarkerId, MarkerTarget, TargetState};
 use stratum_core::structs::snapshot::LibrarySnapshot;
 use stratum_ui::state::{Dialog, DialogItem, Page};
 use stratum_ui::views::dialogs::{AssignDialog, AssignSubject, RenameDialog};
@@ -65,6 +65,27 @@ fn delete_confirmation_lists_markers() {
     Scenes::click_last(&mut session, "Delete");
     assert_eq!(session.actions, [LibraryAction::DeleteStructure(StructureId(1))]);
     assert!(session.state.dialog.is_none());
+}
+
+#[test]
+fn delete_dialog_names_a_cycling_marker_on_the_deleted_structure() {
+    let mut snapshot = SnapshotFixture::library();
+    snapshot.projects[0].structures.push(SnapshotFixture::structure(6, "Gatehouse", Some(2)));
+    let project = MarkerTarget::Project(ProjectId(2));
+    let mut on_hall = SnapshotFixture::marker(1, "East wing", [0, 64, 0], true, TargetState::Ok);
+    on_hall.target = project;
+    on_hall.target_name = "Willow Manor".to_owned();
+    on_hall.current = Some(StructureId(1));
+    let mut on_gate = SnapshotFixture::marker(2, "Lighthouse", [9, 64, 0], false, TargetState::Ok);
+    on_gate.target = project;
+    on_gate.target_name = "Willow Manor".to_owned();
+    on_gate.current = Some(StructureId(6));
+    snapshot.markers = vec![on_hall, on_gate];
+    let mut session = Scenes::structure_page(snapshot);
+    Scenes::click_first(&mut session, "Delete");
+
+    assert!(ShapeProbe::text_rect(&session.shapes, "East wing (carries Main hall)").is_some());
+    assert!(ShapeProbe::text_rect(&session.shapes, "Lighthouse (through Willow Manor)").is_some());
 }
 
 #[test]

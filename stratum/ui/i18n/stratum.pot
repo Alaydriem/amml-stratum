@@ -66,6 +66,11 @@ msgstr ""
 msgid "{x} {y} {z}"
 msgstr ""
 
+#. the structure a marker shows now and its place in the project's cycle
+#, python-brace-format
+msgid "{name} {number}/{count}"
+msgstr ""
+
 msgid "Active"
 msgstr ""
 
@@ -182,6 +187,9 @@ msgid "Assign to marker…"
 msgstr ""
 
 msgid "Place marker here"
+msgstr ""
+
+msgid "Place project marker"
 msgstr ""
 
 msgid "Project actions"

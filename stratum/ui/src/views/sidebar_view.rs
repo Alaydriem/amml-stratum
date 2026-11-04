@@ -126,15 +126,15 @@ impl SidebarView {
         ScrollBar::show(ui, area, false, |ui| {
             let mut shown = 0;
             for row in rows {
-                let SidebarRow::Marker { id, name, target, target_name, origin, active, missing } = row else {
+                let SidebarRow::Marker { id, name, target, target_name, origin, active, missing, part } = row else {
                     continue;
                 };
-                if !MarkerFilter::matches(name, target_name, &filter) {
+                if !MarkerFilter::matches(name, target_name, part.as_ref().map(|(part, ..)| part.as_str()), &filter) {
                     continue;
                 }
                 shown += 1;
                 let fields = ((*id, name.as_str(), *target), target_name.as_str());
-                Self::show_marker(ui, fields, (*origin, *active, *missing), (snapshot, state), out);
+                Self::show_marker(ui, fields, part.as_ref(), (*origin, *active, *missing), (snapshot, state), out);
             }
             if total == 0 {
                 Caption::new(Text::message(StratumMessage::NoMarkers)).show(ui);
@@ -147,6 +147,7 @@ impl SidebarView {
     fn show_marker(
         ui: &mut Ui,
         ((id, name, target), target_name): ((MarkerId, &str, MarkerTarget), &str),
+        part: Option<&(String, u32, u32)>,
         (origin, active, missing): ([i32; 3], bool, bool),
         (snapshot, state): (&LibrarySnapshot, &mut LibraryUiState),
         out: &mut Vec<LibraryAction>,
@@ -161,6 +162,16 @@ impl SidebarView {
         } else {
             let target = Text::user(UserText::from_model(target_name.to_owned()));
             chips.push(Chip::new(ChipKind::Display(ChipTone::Neutral), target));
+            if let Some((part, number, count)) = part {
+                let args = Args::new()
+                    .user("name", UserText::from_model(part.clone()))
+                    .uint("number", u64::from(*number))
+                    .uint("count", u64::from(*count));
+                chips.push(Chip::new(
+                    ChipKind::Display(ChipTone::Neutral),
+                    Text::format(StratumMessage::MarkerPart, args),
+                ));
+            }
         }
         let position =
             Args::new().int("x", i64::from(origin[0])).int("y", i64::from(origin[1])).int("z", i64::from(origin[2]));

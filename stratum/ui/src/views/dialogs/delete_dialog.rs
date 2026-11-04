@@ -70,19 +70,26 @@ impl DeleteDialog {
                 (MarkerTarget::Structure(id), project.map(MarkerTarget::Project))
             }
         };
+        let deleted = match self.item {
+            DialogItem::Structure(id) => Some(id),
+            _ => None,
+        };
         let mut lines = Vec::new();
         for marker in &snapshot.markers {
-            let message = if marker.target == carried {
-                StratumMessage::MarkerCarries
+            let cycling_here = deleted.is_some() && marker.current == deleted && Some(marker.target) == through;
+            let (message, target) = if marker.target == carried {
+                (StratumMessage::MarkerCarries, ItemNames::target(snapshot, marker.target))
+            } else if cycling_here {
+                let own = deleted.and_then(|id| ItemNames::target(snapshot, MarkerTarget::Structure(id)));
+                (StratumMessage::MarkerCarries, own)
             } else if Some(marker.target) == through {
-                StratumMessage::MarkerThrough
+                (StratumMessage::MarkerThrough, ItemNames::target(snapshot, marker.target))
             } else {
                 continue;
             };
-            let args = Args::new().user("marker", UserText::from_model(marker.name.clone())).user(
-                "target",
-                UserText::from_model(ItemNames::target(snapshot, marker.target).unwrap_or_default().to_owned()),
-            );
+            let args = Args::new()
+                .user("marker", UserText::from_model(marker.name.clone()))
+                .user("target", UserText::from_model(target.unwrap_or_default().to_owned()));
             lines.push(Text::format(message, args));
         }
         lines

@@ -1,4 +1,4 @@
-use super::{Marker, MarkerId, WorldKey};
+use super::{Marker, MarkerId, MarkerView, WorldKey};
 
 // Saved markers of one world and dimension. Logic lives in `MarkerService`.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -22,6 +22,7 @@ impl MarkerSet {
     pub(crate) fn clamp_views(&mut self) {
         for marker in &mut self.markers {
             marker.view.opacity_step = marker.view.opacity().index();
+            marker.view.parts.truncate(MarkerView::MAX_PARTS);
         }
     }
 
