@@ -1,5 +1,5 @@
 [tasks.preflight]
-description = "Names a missing Rust toolchain or cargo-nextest before a build turns it into an obscure error"
+description = "Names a missing toolchain or tool before a build turns it into an obscure error"
 dir = "{{config_root}}"
 run = [
   "rustc --version",
@@ -8,7 +8,7 @@ run = [
 ]
 
 [tasks.check]
-description = "cargo check, clippy with warnings denied (also with the stratum-amml gate feature), and rustfmt check over the Stratum crates"
+description = "Compiles, runs clippy with warnings denied and checks formatting; also with the stratum-amml gate feature"
 dir = "{{config_root}}"
 run = [
   "cargo check --workspace --all-targets",
@@ -19,7 +19,7 @@ run = [
 ]
 
 [tasks.test]
-description = "Every workspace test through cargo-nextest, then the stratum-amml tests again with the gate feature"
+description = "Every test through cargo nextest run; also runs the stratum-amml tests again with the gate feature"
 dir = "{{config_root}}"
 run = [
   "cargo nextest run --workspace",
@@ -43,7 +43,7 @@ dir = "{{config_root}}"
 run = "cargo run -q -p stratum-ui --example stratum_i18n_extract -- --check"
 
 [tasks.package]
-description = "Builds the AMML mod into dist/@alaydriem/stratum (alaydriem_stratum.dll, amml.hcl and the font licence OFL.txt); --features passes cargo features, for example --features gate"
+description = "Builds dist/@alaydriem/stratum/ (alaydriem_stratum.dll, amml.hcl, OFL.txt), the release artifact; also `--features <list>` passes cargo features, for example `gate`"
 dir = "{{config_root}}"
 shell = "bash -c"
 usage = 'flag "--features <features>" help="Cargo features of stratum-amml, comma separated"'
@@ -68,3 +68,22 @@ run = "cargo run -q --release -p stratum-tools --bin generate_samples -- samples
 [tools]
 # cargo metadata is read with it, to find the amml sources cargo fetched
 jq = "1.8.1"
+
+[tasks.install]
+description = "Runs package, then copies dist/@alaydriem/stratum into mods/amml/@alaydriem/stratum of an AMML instance under %LOCALAPPDATA%/amml/instances (--instance, default 1.26.60.05). The mod's config/ stays. Close the game first: a running game locks the DLL"
+depends = ["package"]
+dir = "{{config_root}}"
+shell = "bash -c"
+usage = '''
+flag "--instance <name>" default="1.26.60.05" help="The instance folder under %LOCALAPPDATA%/amml/instances"
+'''
+run = '''
+set -e
+[ -n "$LOCALAPPDATA" ] || { echo "LOCALAPPDATA is not set; the instances live under %LOCALAPPDATA%/amml/instances"; exit 1; }
+instance="$LOCALAPPDATA/amml/instances/${usage_instance:-1.26.60.05}"
+[ -f "$instance/Minecraft.Windows.exe" ] || { echo "no instance at $instance"; exit 1; }
+target="$instance/mods/amml/@alaydriem/stratum"
+mkdir -p "$target"
+cp -r dist/@alaydriem/stratum/. "$target/"
+echo "installed dist/@alaydriem/stratum -> $target"
+'''
