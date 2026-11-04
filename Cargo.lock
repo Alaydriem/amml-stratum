@@ -1504,7 +1504,7 @@ checksum = "a2eb9349b6444b326872e140eb1cf5e7c522154d69e7a0ffb0fb81c06b37543f"
 
 [[package]]
 name = "stratum-amml"
-version = "26.60.0"
+version = "26.60.5"
 dependencies = [
  "amm-abi",
  "amm-client",
@@ -1526,7 +1526,7 @@ dependencies = [
 
 [[package]]
 name = "stratum-core"
-version = "26.60.0"
+version = "26.60.5"
 dependencies = [
  "criterion",
  "crossbeam-channel",
@@ -1541,7 +1541,7 @@ dependencies = [
 
 [[package]]
 name = "stratum-tools"
-version = "26.60.0"
+version = "26.60.5"
 dependencies = [
  "png",
  "stratum-core",
@@ -1549,7 +1549,7 @@ dependencies = [
 
 [[package]]
 name = "stratum-ui"
-version = "26.60.0"
+version = "26.60.5"
 dependencies = [
  "amml-i18n",
  "amml-i18n-tool",
