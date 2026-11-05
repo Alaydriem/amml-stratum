@@ -49,8 +49,8 @@ dependencies = [
 
 [[package]]
 name = "amm-abi"
-version = "26.60.5"
-source = "git+https://github.com/Alaydriem/amml-modmanager.git?tag=26.60.5#9cf8636bcea149f736f3691362bf850b91027719"
+version = "26.60.6"
+source = "git+https://github.com/Alaydriem/amml-modmanager.git?tag=26.60.6#7f827608abd84c41458c0aa1bc2b70c801d7099d"
 dependencies = [
  "amm-core",
  "bytemuck",
@@ -58,8 +58,8 @@ dependencies = [
 
 [[package]]
 name = "amm-client"
-version = "26.60.5"
-source = "git+https://github.com/Alaydriem/amml-modmanager.git?tag=26.60.5#9cf8636bcea149f736f3691362bf850b91027719"
+version = "26.60.6"
+source = "git+https://github.com/Alaydriem/amml-modmanager.git?tag=26.60.6#7f827608abd84c41458c0aa1bc2b70c801d7099d"
 dependencies = [
  "amm-abi",
  "amm-core",
@@ -77,8 +77,8 @@ dependencies = [
 
 [[package]]
 name = "amm-core"
-version = "26.60.5"
-source = "git+https://github.com/Alaydriem/amml-modmanager.git?tag=26.60.5#9cf8636bcea149f736f3691362bf850b91027719"
+version = "26.60.6"
+source = "git+https://github.com/Alaydriem/amml-modmanager.git?tag=26.60.6#7f827608abd84c41458c0aa1bc2b70c801d7099d"
 dependencies = [
  "amml-abi",
  "arc-swap",
@@ -1504,7 +1504,7 @@ checksum = "a2eb9349b6444b326872e140eb1cf5e7c522154d69e7a0ffb0fb81c06b37543f"
 
 [[package]]
 name = "stratum-amml"
-version = "26.60.5"
+version = "26.60.6"
 dependencies = [
  "amm-abi",
  "amm-client",
@@ -1526,7 +1526,7 @@ dependencies = [
 
 [[package]]
 name = "stratum-core"
-version = "26.60.5"
+version = "26.60.6"
 dependencies = [
  "criterion",
  "crossbeam-channel",
@@ -1541,7 +1541,7 @@ dependencies = [
 
 [[package]]
 name = "stratum-tools"
-version = "26.60.5"
+version = "26.60.6"
 dependencies = [
  "png",
  "stratum-core",
@@ -1549,7 +1549,7 @@ dependencies = [
 
 [[package]]
 name = "stratum-ui"
-version = "26.60.5"
+version = "26.60.6"
 dependencies = [
  "amml-i18n",
  "amml-i18n-tool",
