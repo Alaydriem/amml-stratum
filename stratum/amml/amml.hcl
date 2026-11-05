@@ -2,6 +2,7 @@ namespace   = "alaydriem"
 name        = "stratum"
 entry       = "alaydriem_stratum.dll"
 api_version = 2
+amml_version = "26.60.6"
 entries = [
   # required: the ghost build and draw
   "LevelRenderer.renderLevel",
