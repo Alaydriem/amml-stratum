@@ -3,7 +3,7 @@ resolver = "3"
 members = ["stratum/core", "stratum/ui", "stratum/tools", "stratum/amml"]
 
 [workspace.package]
-version = "26.60.6"
+version = "26.62.0"
 edition = "2024"
 rust-version = "1.98"
 authors = ["Charles R. Portwood II"]
@@ -23,16 +23,16 @@ thiserror = "2.0.17"
 curia = "=0.2.2"
 hcl-rs = "=0.19.8"
 windows = "0.62.2"
-amml-ui = { git = "https://github.com/Alaydriem/amml.git", tag = "26.60.5" }
-amml-i18n = { git = "https://github.com/Alaydriem/amml.git", tag = "26.60.5" }
-amml-i18n-tool = { git = "https://github.com/Alaydriem/amml.git", tag = "26.60.5" }
-amml-ui-rules = { git = "https://github.com/Alaydriem/amml.git", tag = "26.60.5" }
-amml-sdk = { git = "https://github.com/Alaydriem/amml.git", tag = "26.60.5" }
-amml-game = { git = "https://github.com/Alaydriem/amml.git", tag = "26.60.5" }
-amml-msvc = { git = "https://github.com/Alaydriem/amml.git", tag = "26.60.5" }
-amm-abi = { git = "https://github.com/Alaydriem/amml-modmanager.git", tag = "26.60.6" }
-amm-client = { git = "https://github.com/Alaydriem/amml-modmanager.git", tag = "26.60.6" }
-amm-core = { git = "https://github.com/Alaydriem/amml-modmanager.git", tag = "26.60.6" }
+amml-ui = { git = "https://github.com/Alaydriem/amml.git", tag = "26.62.0" }
+amml-i18n = { git = "https://github.com/Alaydriem/amml.git", tag = "26.62.0" }
+amml-i18n-tool = { git = "https://github.com/Alaydriem/amml.git", tag = "26.62.0" }
+amml-ui-rules = { git = "https://github.com/Alaydriem/amml.git", tag = "26.62.0" }
+amml-sdk = { git = "https://github.com/Alaydriem/amml.git", tag = "26.62.0" }
+amml-game = { git = "https://github.com/Alaydriem/amml.git", tag = "26.62.0" }
+amml-msvc = { git = "https://github.com/Alaydriem/amml.git", tag = "26.62.0" }
+amm-abi = { git = "https://github.com/Alaydriem/amml-modmanager.git", tag = "26.62.0" }
+amm-client = { git = "https://github.com/Alaydriem/amml-modmanager.git", tag = "26.62.0" }
+amm-core = { git = "https://github.com/Alaydriem/amml-modmanager.git", tag = "26.62.0" }
 stratum-core = { path = "stratum/core" }
 stratum-ui = { path = "stratum/ui" }
 stratum-tools = { path = "stratum/tools" }

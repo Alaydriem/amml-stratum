@@ -49,8 +49,8 @@ dependencies = [
 
 [[package]]
 name = "amm-abi"
-version = "26.60.6"
-source = "git+https://github.com/Alaydriem/amml-modmanager.git?tag=26.60.6#7f827608abd84c41458c0aa1bc2b70c801d7099d"
+version = "26.62.0"
+source = "git+https://github.com/Alaydriem/amml-modmanager.git?tag=26.62.0#4d3c69595ea704595f1d3b1622af19941499fe09"
 dependencies = [
  "amm-core",
  "bytemuck",
@@ -58,8 +58,8 @@ dependencies = [
 
 [[package]]
 name = "amm-client"
-version = "26.60.6"
-source = "git+https://github.com/Alaydriem/amml-modmanager.git?tag=26.60.6#7f827608abd84c41458c0aa1bc2b70c801d7099d"
+version = "26.62.0"
+source = "git+https://github.com/Alaydriem/amml-modmanager.git?tag=26.62.0#4d3c69595ea704595f1d3b1622af19941499fe09"
 dependencies = [
  "amm-abi",
  "amm-core",
@@ -77,8 +77,8 @@ dependencies = [
 
 [[package]]
 name = "amm-core"
-version = "26.60.6"
-source = "git+https://github.com/Alaydriem/amml-modmanager.git?tag=26.60.6#7f827608abd84c41458c0aa1bc2b70c801d7099d"
+version = "26.62.0"
+source = "git+https://github.com/Alaydriem/amml-modmanager.git?tag=26.62.0#4d3c69595ea704595f1d3b1622af19941499fe09"
 dependencies = [
  "amml-abi",
  "arc-swap",
@@ -94,13 +94,13 @@ dependencies = [
 
 [[package]]
 name = "amml-abi"
-version = "26.60.5"
-source = "git+https://github.com/Alaydriem/amml.git?tag=26.60.5#88e58bcb3673d84d4c14eb493c2a8ac2460787de"
+version = "26.62.0"
+source = "git+https://github.com/Alaydriem/amml.git?tag=26.62.0#1b4e270b311d13f2099094ae5073e5673a1dcff4"
 
 [[package]]
 name = "amml-game"
-version = "26.60.5"
-source = "git+https://github.com/Alaydriem/amml.git?tag=26.60.5#88e58bcb3673d84d4c14eb493c2a8ac2460787de"
+version = "26.62.0"
+source = "git+https://github.com/Alaydriem/amml.git?tag=26.62.0#1b4e270b311d13f2099094ae5073e5673a1dcff4"
 dependencies = [
  "amml-msvc",
  "amml-sdk",
@@ -109,8 +109,8 @@ dependencies = [
 
 [[package]]
 name = "amml-i18n"
-version = "26.60.5"
-source = "git+https://github.com/Alaydriem/amml.git?tag=26.60.5#88e58bcb3673d84d4c14eb493c2a8ac2460787de"
+version = "26.62.0"
+source = "git+https://github.com/Alaydriem/amml.git?tag=26.62.0#1b4e270b311d13f2099094ae5073e5673a1dcff4"
 dependencies = [
  "curia",
  "icu_locale_core",
@@ -123,8 +123,8 @@ dependencies = [
 
 [[package]]
 name = "amml-i18n-tool"
-version = "26.60.5"
-source = "git+https://github.com/Alaydriem/amml.git?tag=26.60.5#88e58bcb3673d84d4c14eb493c2a8ac2460787de"
+version = "26.62.0"
+source = "git+https://github.com/Alaydriem/amml.git?tag=26.62.0#1b4e270b311d13f2099094ae5073e5673a1dcff4"
 dependencies = [
  "amml-i18n",
  "icu_locale_core",
@@ -136,16 +136,16 @@ dependencies = [
 
 [[package]]
 name = "amml-msvc"
-version = "26.60.5"
-source = "git+https://github.com/Alaydriem/amml.git?tag=26.60.5#88e58bcb3673d84d4c14eb493c2a8ac2460787de"
+version = "26.62.0"
+source = "git+https://github.com/Alaydriem/amml.git?tag=26.62.0#1b4e270b311d13f2099094ae5073e5673a1dcff4"
 dependencies = [
  "thiserror",
 ]
 
 [[package]]
 name = "amml-sdk"
-version = "26.60.5"
-source = "git+https://github.com/Alaydriem/amml.git?tag=26.60.5#88e58bcb3673d84d4c14eb493c2a8ac2460787de"
+version = "26.62.0"
+source = "git+https://github.com/Alaydriem/amml.git?tag=26.62.0#1b4e270b311d13f2099094ae5073e5673a1dcff4"
 dependencies = [
  "amml-abi",
  "thiserror",
@@ -153,8 +153,8 @@ dependencies = [
 
 [[package]]
 name = "amml-ui"
-version = "26.60.5"
-source = "git+https://github.com/Alaydriem/amml.git?tag=26.60.5#88e58bcb3673d84d4c14eb493c2a8ac2460787de"
+version = "26.62.0"
+source = "git+https://github.com/Alaydriem/amml.git?tag=26.62.0#1b4e270b311d13f2099094ae5073e5673a1dcff4"
 dependencies = [
  "amml-i18n",
  "curia",
@@ -163,8 +163,8 @@ dependencies = [
 
 [[package]]
 name = "amml-ui-rules"
-version = "26.60.5"
-source = "git+https://github.com/Alaydriem/amml.git?tag=26.60.5#88e58bcb3673d84d4c14eb493c2a8ac2460787de"
+version = "26.62.0"
+source = "git+https://github.com/Alaydriem/amml.git?tag=26.62.0#1b4e270b311d13f2099094ae5073e5673a1dcff4"
 
 [[package]]
 name = "android_log-sys"
@@ -1504,7 +1504,7 @@ checksum = "a2eb9349b6444b326872e140eb1cf5e7c522154d69e7a0ffb0fb81c06b37543f"
 
 [[package]]
 name = "stratum-amml"
-version = "26.60.6"
+version = "26.62.0"
 dependencies = [
  "amm-abi",
  "amm-client",
@@ -1526,7 +1526,7 @@ dependencies = [
 
 [[package]]
 name = "stratum-core"
-version = "26.60.6"
+version = "26.62.0"
 dependencies = [
  "criterion",
  "crossbeam-channel",
@@ -1541,7 +1541,7 @@ dependencies = [
 
 [[package]]
 name = "stratum-tools"
-version = "26.60.6"
+version = "26.62.0"
 dependencies = [
  "png",
  "stratum-core",
@@ -1549,7 +1549,7 @@ dependencies = [
 
 [[package]]
 name = "stratum-ui"
-version = "26.60.6"
+version = "26.62.0"
 dependencies = [
  "amml-i18n",
  "amml-i18n-tool",
