@@ -1,3 +1,7 @@
+use std::io::Write;
+
+use flate2::Compression;
+use flate2::write::ZlibEncoder;
 use stratum_core::structs::nbt::{NbtCompound, NbtTag};
 
 use super::NbtWriter;
@@ -17,6 +21,11 @@ pub struct StructureFixture {
     array_layers: bool,
     // Writes size and structure_world_origin as Int Arrays instead of Int lists.
     array_header: bool,
+    // Writes block_indices with the primary layer only, as some exporters do when nothing is waterlogged.
+    primary_only: bool,
+    // When set, writes `compression` with this method. For any method but 0, `structure` is a Byte
+    // Array holding the zlib-compressed structure compound, as newer game versions write it.
+    compression: Option<i32>,
 }
 
 impl StructureFixture {
@@ -34,6 +43,8 @@ impl StructureFixture {
             fill: None,
             array_layers: false,
             array_header: false,
+            primary_only: false,
+            compression: None,
         }
     }
 
@@ -101,6 +112,21 @@ impl StructureFixture {
         self
     }
 
+    pub fn primary_layer_only(mut self) -> Self {
+        self.primary_only = true;
+        self
+    }
+
+    pub fn compressed(self) -> Self {
+        self.compression_method(1)
+    }
+
+    // Writes `compression` as `method`. Method 0 keeps the plain compound; any other is zlib data.
+    pub fn compression_method(mut self, method: i32) -> Self {
+        self.compression = Some(method);
+        self
+    }
+
     // Replaces both index layers as written, whatever the size says.
     pub fn raw_indices(mut self, primary: Vec<i32>, secondary: Vec<i32>) -> Self {
         self.primary = primary;
@@ -132,29 +158,29 @@ impl StructureFixture {
         let mut out = Vec::with_capacity(cells * 4 + 4096);
         out.push(10);
         NbtWriter::write_string(&mut out, "").expect("fixture NBT is writable");
+        if let Some(method) = self.compression {
+            NbtWriter::write_entry(&mut out, "compression", &NbtTag::Int(method)).expect("fixture NBT is writable");
+        }
         NbtWriter::write_entry(&mut out, "format_version", &NbtTag::Int(1)).expect("fixture NBT is writable");
         NbtWriter::write_entry(&mut out, "size", &self.triple(self.size)).expect("fixture NBT is writable");
 
-        out.push(10);
-        NbtWriter::write_string(&mut out, "structure").expect("fixture NBT is writable");
-        // block_indices: a list of two Int lists, or of two Int Arrays.
-        out.push(9);
-        NbtWriter::write_string(&mut out, "block_indices").expect("fixture NBT is writable");
-        out.push(if self.array_layers { 11 } else { 9 });
-        out.extend_from_slice(&2u32.to_le_bytes());
-        match self.fill {
-            Some((count, primary, secondary)) => {
-                self.write_fill(&mut out, primary, count);
-                self.write_fill(&mut out, secondary, count);
+        match self.compression {
+            Some(method) if method != 0 => {
+                // The compressed payload is a whole root compound with an empty name.
+                let mut inner = Vec::with_capacity(cells * 4 + 4096);
+                inner.push(10);
+                NbtWriter::write_string(&mut inner, "").expect("fixture NBT is writable");
+                self.write_structure_body(&mut inner, palette);
+                let packed = Self::zlib(&inner);
+                NbtWriter::write_entry(&mut out, "structure", &NbtTag::ByteArray(packed))
+                    .expect("fixture NBT is writable");
             }
-            None => {
-                self.write_layer(&mut out, &self.primary);
-                self.write_layer(&mut out, &self.secondary);
+            _ => {
+                out.push(10);
+                NbtWriter::write_string(&mut out, "structure").expect("fixture NBT is writable");
+                self.write_structure_body(&mut out, palette);
             }
         }
-        NbtWriter::write_entry(&mut out, "entities", &NbtTag::List(Vec::new())).expect("fixture NBT is writable");
-        NbtWriter::write_entry(&mut out, "palette", &NbtTag::Compound(palette)).expect("fixture NBT is writable");
-        out.push(0);
 
         if let Some(origin) = self.origin {
             NbtWriter::write_entry(&mut out, "structure_world_origin", &self.triple(origin))
@@ -162,6 +188,54 @@ impl StructureFixture {
         }
         out.push(0);
         out
+    }
+
+    // zlib data as NBT Byte Array items.
+    pub fn zlib(raw: &[u8]) -> Vec<i8> {
+        let mut encoder = ZlibEncoder::new(Vec::new(), Compression::fast());
+        encoder.write_all(raw).expect("fixture zlib is writable");
+        encoder.finish().expect("fixture zlib is writable").into_iter().map(|byte| byte as i8).collect()
+    }
+
+    // zlib data for `count` zero bytes, built in chunks so the zeros are never held at once.
+    pub fn zlib_zeros(count: usize) -> Vec<i8> {
+        const CHUNK: usize = 1 << 20;
+        let zeros = vec![0u8; CHUNK];
+        let mut encoder = ZlibEncoder::new(Vec::new(), Compression::fast());
+        let mut left = count;
+        while left > 0 {
+            let take = left.min(CHUNK);
+            encoder.write_all(&zeros[..take]).expect("fixture zlib is writable");
+            left -= take;
+        }
+        encoder.finish().expect("fixture zlib is writable").into_iter().map(|byte| byte as i8).collect()
+    }
+
+    // The entries of the structure compound and its end tag.
+    fn write_structure_body(&self, out: &mut Vec<u8>, palette: NbtCompound) {
+        // block_indices: a list of one or two Int lists, or of one or two Int Arrays.
+        out.push(9);
+        NbtWriter::write_string(out, "block_indices").expect("fixture NBT is writable");
+        out.push(if self.array_layers { 11 } else { 9 });
+        let layers: u32 = if self.primary_only { 1 } else { 2 };
+        out.extend_from_slice(&layers.to_le_bytes());
+        match self.fill {
+            Some((count, primary, secondary)) => {
+                self.write_fill(out, primary, count);
+                if !self.primary_only {
+                    self.write_fill(out, secondary, count);
+                }
+            }
+            None => {
+                self.write_layer(out, &self.primary);
+                if !self.primary_only {
+                    self.write_layer(out, &self.secondary);
+                }
+            }
+        }
+        NbtWriter::write_entry(out, "entities", &NbtTag::List(Vec::new())).expect("fixture NBT is writable");
+        NbtWriter::write_entry(out, "palette", &NbtTag::Compound(palette)).expect("fixture NBT is writable");
+        out.push(0);
     }
 
     fn cell(&self, x: usize, y: usize, z: usize) -> usize {

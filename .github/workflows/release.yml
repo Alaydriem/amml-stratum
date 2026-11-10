@@ -35,4 +35,4 @@ jobs:
       namespace: alaydriem
       name: stratum
       package_task: package
-      descriptor: stratum/amml/descriptor.hcl
+      descriptor: src/amml/descriptor.hcl

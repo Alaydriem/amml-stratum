@@ -1,4 +1,7 @@
 use std::borrow::Cow;
+use std::io::Read;
+
+use flate2::read::ZlibDecoder;
 
 use crate::errors::StructureError;
 use crate::services::NbtReader;
@@ -16,6 +19,9 @@ impl StructureParser {
     // Palette indices are stored as u16 with u16::MAX meaning no block, so this many entries
     // or more cannot be stored.
     const MAX_PALETTE: usize = BlockLayer::NONE as usize;
+    // Most bytes a compressed structure may inflate to: both index layers of the largest volume as
+    // i32, plus 64 MiB for the palette, entities and block data.
+    pub const MAX_INFLATED: u64 = 2 * 4 * Self::MAX_VOLUME + 64 * 1024 * 1024;
     // Cells read between two checks of the stop in `parse_until`.
     const STOP_EVERY: usize = 1 << 16;
 
@@ -36,18 +42,60 @@ impl StructureParser {
         }
         let world_origin = Self::read_origin(&root);
 
-        let structure = Self::compound(&root, "structure")?;
+        // A compressed structure is a zlib-compressed root compound; its layer spans point into the
+        // inflated bytes, not the file bytes.
+        let inflated = Self::inflated_structure(&root)?;
+        let inner_root;
+        let (bytes, structure) = match &inflated {
+            Some(raw) => {
+                inner_root = NbtReader::read(raw, NbtLimits::STRUCTURE)?.1;
+                (raw.as_slice(), &inner_root)
+            }
+            None => (bytes, Self::compound(&root, "structure")?),
+        };
         let palette = Self::read_palette(structure)?;
         if palette.len() >= Self::MAX_PALETTE {
             return Err(StructureError::PaletteTooLarge { entries: palette.len() });
         }
-        let [primary, secondary] = Self::list(structure, "block_indices")? else {
-            return Err(StructureError::MissingField("block_indices"));
+        // Some exporters leave out the secondary (waterlog) layer when no cell uses it.
+        let (primary, secondary) = match Self::list(structure, "block_indices")? {
+            [primary, secondary] => (primary, Some(secondary)),
+            [primary] => (primary, None),
+            _ => return Err(StructureError::MissingField("block_indices")),
         };
         let primary = Self::dense_layer(&Self::layer_bytes(bytes, primary, volume)?, palette.len(), &stopped)?;
-        let secondary = Self::sparse_layer(&Self::layer_bytes(bytes, secondary, volume)?, &palette, &stopped)?;
+        let secondary = match secondary {
+            Some(layer) => Self::sparse_layer(&Self::layer_bytes(bytes, layer, volume)?, &palette, &stopped)?,
+            None => SparseLayer::new(Vec::new(), Vec::new()),
+        };
 
         Ok(Structure { size, world_origin, palette, primary, secondary })
+    }
+
+    // `compression` absent or 0: the structure is a plain compound. 1: zlib data in a Byte Array.
+    fn inflated_structure(root: &NbtCompound) -> Result<Option<Vec<u8>>, StructureError> {
+        match root.get("compression") {
+            None | Some(NbtTag::Int(0)) => Ok(None),
+            Some(NbtTag::Int(1)) => match root.get("structure") {
+                Some(NbtTag::ByteArray(packed)) => Self::inflate(packed).map(Some),
+                _ => Err(StructureError::MissingField("structure")),
+            },
+            Some(NbtTag::Int(method)) => Err(StructureError::UnknownCompression { method: *method }),
+            Some(_) => Err(StructureError::MissingField("compression")),
+        }
+    }
+
+    fn inflate(packed: &[i8]) -> Result<Vec<u8>, StructureError> {
+        let packed: Vec<u8> = packed.iter().map(|byte| *byte as u8).collect();
+        let mut raw = Vec::new();
+        ZlibDecoder::new(packed.as_slice())
+            .take(Self::MAX_INFLATED + 1)
+            .read_to_end(&mut raw)
+            .map_err(|_| StructureError::BadCompression)?;
+        if raw.len() as u64 > Self::MAX_INFLATED {
+            return Err(StructureError::InflatedTooLarge);
+        }
+        Ok(raw)
     }
 
     fn compound<'a>(parent: &'a NbtCompound, name: &'static str) -> Result<&'a NbtCompound, StructureError> {

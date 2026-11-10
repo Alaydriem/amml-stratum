@@ -16,6 +16,12 @@ pub enum StructureError {
     PaletteTooLarge { entries: usize },
     #[error("structure volume {volume} is past the limit")]
     TooLarge { volume: u64 },
+    #[error("structure compression method {method} is not known")]
+    UnknownCompression { method: i32 },
+    #[error("compressed structure data is corrupt")]
+    BadCompression,
+    #[error("compressed structure data inflates past the limit")]
+    InflatedTooLarge,
     #[error("structure file could not be read: {0}")]
     Unreadable(String),
     #[error("structure read stopped before it finished")]

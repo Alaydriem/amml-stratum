@@ -23,6 +23,7 @@ hcl-rs.workspace = true
 crossbeam-channel.workspace = true
 serde_json.workspace = true
 png.workspace = true
+flate2.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true

@@ -33,12 +33,12 @@ env = { CARGO_BUILD_JOBS = "8" }
 run = "cargo bench -p stratum-core"
 
 [tasks."i18n:extract"]
-description = "Writes stratum/ui/i18n/stratum.pot from the StratumMessage enum"
+description = "Writes src/ui/i18n/stratum.pot from the StratumMessage enum"
 dir = "{{config_root}}"
 run = "cargo run -q -p stratum-ui --example stratum_i18n_extract"
 
 [tasks."i18n:check"]
-description = "Fails when stratum/ui/i18n/stratum.pot is out of date with the StratumMessage enum"
+description = "Fails when src/ui/i18n/stratum.pot is out of date with the StratumMessage enum"
 dir = "{{config_root}}"
 run = "cargo run -q -p stratum-ui --example stratum_i18n_extract -- --check"
 
@@ -50,14 +50,15 @@ usage = 'flag "--features <features>" help="Cargo features of stratum-amml, comm
 run = '''
 set -e
 if [ -n "${usage_features:-}" ]; then cargo build --release -p stratum-amml --features "$usage_features"; else cargo build --release -p stratum-amml; fi
-rm -rf dist/alaydriem-stratum dist/@alaydriem/stratum
+rm -rf dist/@alaydriem/stratum
 mkdir -p dist/@alaydriem/stratum
 cp target/release/alaydriem_stratum.dll dist/@alaydriem/stratum/alaydriem_stratum.dll
-cp stratum/amml/amml.hcl dist/@alaydriem/stratum/amml.hcl
-cp stratum/amml/icon.png dist/@alaydriem/stratum/icon.png
+cp src/amml/amml.hcl dist/@alaydriem/stratum/amml.hcl
+cp src/amml/icon.png dist/@alaydriem/stratum/icon.png
 # the DLL embeds the NordwandMono font from amml-ui; its licence ships beside it
 ui_manifest=$(cargo metadata --format-version 1 --locked | jq -r '.packages[] | select(.name == "amml-ui") | .manifest_path')
 cp "$(dirname "$ui_manifest")/assets/fonts/OFL.txt" dist/@alaydriem/stratum/OFL.txt
+if find dist -name '*.pdb' | grep -q .; then echo "a .pdb is in dist/; debug symbols are never shipped"; exit 1; fi
 echo "built dist/@alaydriem/stratum (features: ${usage_features:-none})"
 '''
 
@@ -71,17 +72,17 @@ run = "cargo run -q --release -p stratum-tools --bin generate_samples -- samples
 jq = "1.8.1"
 
 [tasks.install]
-description = "Runs package, then copies dist/@alaydriem/stratum into mods/amml/@alaydriem/stratum of an AMML instance under %LOCALAPPDATA%/amml/instances (--instance, default 1.26.60.05). The mod's config/ stays. Close the game first: a running game locks the DLL"
+description = "Runs package, then copies dist/@alaydriem/stratum into mods/amml/@alaydriem/stratum of an AMML instance under %LOCALAPPDATA%/amml/instances (--instance, required). The mod's config/ stays. Close the game first: a running game locks the DLL"
 depends = ["package"]
 dir = "{{config_root}}"
 shell = "bash -c"
 usage = '''
-flag "--instance <name>" default="1.26.60.05" help="The instance folder under %LOCALAPPDATA%/amml/instances"
+flag "--instance <name>" required=#true help="The instance folder under %LOCALAPPDATA%/amml/instances"
 '''
 run = '''
 set -e
 [ -n "$LOCALAPPDATA" ] || { echo "LOCALAPPDATA is not set; the instances live under %LOCALAPPDATA%/amml/instances"; exit 1; }
-instance="$LOCALAPPDATA/amml/instances/${usage_instance:-1.26.60.05}"
+instance="$LOCALAPPDATA/amml/instances/${usage_instance:?--instance is required}"
 [ -f "$instance/Minecraft.Windows.exe" ] || { echo "no instance at $instance"; exit 1; }
 target="$instance/mods/amml/@alaydriem/stratum"
 mkdir -p "$target"

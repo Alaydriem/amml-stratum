@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="./assets/icon.png" alt="Stratum" width="256">
+<img src="./assets/readme.png" alt="Stratum" width="256">
 
 # Alaydriem's Stratum
 

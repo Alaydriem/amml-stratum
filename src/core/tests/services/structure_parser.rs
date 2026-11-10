@@ -304,6 +304,118 @@ fn layers_written_as_int_arrays_parse_like_int_lists() {
     assert_eq!(pairs, [(11, 3)]);
 }
 
+// Laid out like the files some exporters write when nothing is waterlogged: block_indices holds the primary layer only.
+#[test]
+fn a_file_with_only_the_primary_layer_has_no_waterlogged_cells() {
+    for layers_as_arrays in [false, true] {
+        let fixture = StructureFixture::new([3, 2, 2])
+            .block(0, 0, 0, "minecraft:stone")
+            .block(2, 1, 1, "minecraft:dirt")
+            .primary_layer_only();
+        let fixture = if layers_as_arrays { fixture.int_array_layers() } else { fixture };
+        let structure = StructureParser::parse(&fixture.bytes()).unwrap();
+
+        assert_eq!(structure.block_count(), 2, "arrays {layers_as_arrays}");
+        assert_eq!(structure.block_at(2, 1, 1).map(|block| block.name.as_str()), Some("minecraft:dirt"));
+        assert_eq!(structure.secondary.iter().count(), 0);
+    }
+}
+
+// The game writes `compression: 1` and the structure compound as zlib data in a Byte Array.
+#[test]
+fn a_compressed_structure_parses_like_a_plain_one() {
+    let fixture = StructureFixture::new([3, 2, 2])
+        .block(0, 0, 0, "minecraft:stone")
+        .block(2, 1, 1, "minecraft:oak_log")
+        .waterlog(2, 1, 1, "minecraft:water")
+        .origin([14, 51, -4]);
+    let plain = StructureParser::parse(&fixture.bytes()).unwrap();
+    let packed = StructureParser::parse(&fixture.compressed().bytes()).unwrap();
+
+    assert_eq!((packed.size.x, packed.size.y, packed.size.z), (3, 2, 2));
+    assert_eq!(packed.world_origin, Some([14, 51, -4]));
+    assert_eq!(packed.palette, plain.palette);
+    assert_eq!(packed.primary.as_slice(), plain.primary.as_slice());
+    assert_eq!(packed.secondary.iter().collect::<Vec<_>>(), [(11, 2)]);
+}
+
+#[test]
+fn a_compressed_structure_with_only_the_primary_layer_parses() {
+    let bytes = StructureFixture::new([48, 48, 40])
+        .block(47, 47, 39, "minecraft:tuff_bricks")
+        .int_array_layers()
+        .primary_layer_only()
+        .compressed()
+        .bytes();
+    let structure = StructureParser::parse(&bytes).unwrap();
+
+    assert_eq!(structure.block_count(), 1);
+    assert_eq!(structure.block_at(47, 47, 39).map(|block| block.name.as_str()), Some("minecraft:tuff_bricks"));
+    assert_eq!(structure.secondary.iter().count(), 0);
+}
+
+#[test]
+fn compression_zero_reads_the_plain_structure_compound() {
+    let bytes = StructureFixture::new([1, 1, 1]).block(0, 0, 0, "minecraft:stone").compression_method(0).bytes();
+    let structure = StructureParser::parse(&bytes).unwrap();
+
+    assert_eq!(structure.block_count(), 1);
+}
+
+#[test]
+fn an_unknown_compression_method_is_refused() {
+    let bytes = StructureFixture::new([1, 1, 1]).block(0, 0, 0, "minecraft:stone").compression_method(2).bytes();
+
+    assert_eq!(StructureParser::parse(&bytes).unwrap_err(), StructureError::UnknownCompression { method: 2 });
+}
+
+#[test]
+fn corrupt_compressed_data_is_refused() {
+    let bytes = NbtWriter::compound(
+        "",
+        &[
+            ("compression", NbtTag::Int(1)),
+            ("size", NbtTag::IntList(vec![1, 1, 1])),
+            ("structure", NbtTag::ByteArray(vec![1, 2, 3, 4])),
+        ],
+    )
+    .expect("fixture NBT is writable");
+
+    assert_eq!(StructureParser::parse(&bytes).unwrap_err(), StructureError::BadCompression);
+}
+
+#[test]
+fn compression_one_without_a_byte_array_is_refused() {
+    let bytes = NbtWriter::compound(
+        "",
+        &[
+            ("compression", NbtTag::Int(1)),
+            ("size", NbtTag::IntList(vec![1, 1, 1])),
+            ("structure", NbtTag::Compound(Default::default())),
+        ],
+    )
+    .expect("fixture NBT is writable");
+
+    assert_eq!(StructureParser::parse(&bytes).unwrap_err(), StructureError::MissingField("structure"));
+}
+
+// One byte past the cap inflates from a few hundred KiB of zlib data; the parser stops at the cap.
+#[test]
+fn compressed_data_that_inflates_past_the_cap_is_refused() {
+    let past_cap = StructureParser::MAX_INFLATED as usize + 1;
+    let bytes = NbtWriter::compound(
+        "",
+        &[
+            ("compression", NbtTag::Int(1)),
+            ("size", NbtTag::IntList(vec![1, 1, 1])),
+            ("structure", NbtTag::ByteArray(StructureFixture::zlib_zeros(past_cap))),
+        ],
+    )
+    .expect("fixture NBT is writable");
+
+    assert_eq!(StructureParser::parse(&bytes).unwrap_err(), StructureError::InflatedTooLarge);
+}
+
 // Header and layers are read independently: Int Array header with Int list layers, and all Int Arrays.
 #[test]
 fn size_and_origin_written_as_int_arrays_are_read() {

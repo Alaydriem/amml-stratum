@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["stratum/core", "stratum/ui", "stratum/tools", "stratum/amml"]
+members = ["src/core", "src/ui", "src/tools", "src/amml"]
 
 [workspace.package]
 version = "26.62.0"
@@ -16,6 +16,7 @@ serde = { version = "1.0.229", features = ["derive"] }
 crossbeam-channel = "0.5.17"
 serde_json = "1.0.154"
 png = "0.18.1"
+flate2 = "1.1.10"
 chrono = { version = "0.4.45", default-features = false, features = ["clock", "std"] }
 tempfile = "3.27.0"
 criterion = "=0.8.2"
@@ -33,9 +34,9 @@ amml-msvc = { git = "https://github.com/Alaydriem/amml.git", tag = "26.62.0" }
 amm-abi = { git = "https://github.com/Alaydriem/amml-modmanager.git", tag = "26.62.0" }
 amm-client = { git = "https://github.com/Alaydriem/amml-modmanager.git", tag = "26.62.0" }
 amm-core = { git = "https://github.com/Alaydriem/amml-modmanager.git", tag = "26.62.0" }
-stratum-core = { path = "stratum/core" }
-stratum-ui = { path = "stratum/ui" }
-stratum-tools = { path = "stratum/tools" }
+stratum-core = { path = "src/core" }
+stratum-ui = { path = "src/ui" }
+stratum-tools = { path = "src/tools" }
 
 [workspace.lints.clippy]
 unwrap_used = "deny"
