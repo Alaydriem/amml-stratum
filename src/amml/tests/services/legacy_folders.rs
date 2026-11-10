@@ -21,7 +21,7 @@ impl Game {
 
     fn dirs(&self) -> ModDirs {
         let mod_dir = self.root.path().join("mods").join("amml").join("@alaydriem").join("stratum");
-        ModDirs { config_dir: mod_dir.join("config"), data_dir: mod_dir.join("data"), mod_dir }
+        ModDirs { config_dir: mod_dir.join("config"), data_dir: mod_dir.join("data"), shared_data_dir: None, mod_dir }
     }
 
     fn old(&self, name: &str) -> PathBuf {
