@@ -43,6 +43,40 @@ impl Scene {
     fn notices(controller: &StratumController) -> Vec<ImportNotice> {
         controller.snapshot().notices.clone()
     }
+
+    fn stone_item() -> ItemId {
+        ItemId("minecraft:stone".to_string())
+    }
+
+    // `count` stone blocks in a row.
+    fn stones(count: i32) -> Vec<u8> {
+        StructureFixture::full([count, 1, 1]).bytes()
+    }
+
+    // Imports the structures into a new project named "Castle".
+    fn project(controller: &mut StratumController, dir: &std::path::Path, parts: &[(&str, i32)]) -> ProjectId {
+        controller.apply(LibraryAction::CreateProject("Castle".to_string()));
+        let project = controller.snapshot().projects[0].id;
+        for (name, count) in parts {
+            Self::add_to(controller, dir, project, name, *count);
+        }
+        project
+    }
+
+    fn add_to(controller: &mut StratumController, dir: &std::path::Path, project: ProjectId, name: &str, count: i32) {
+        Self::import(controller, dir, name, &Self::stones(count));
+        let id = controller.snapshot().unsorted.iter().find(|row| row.name == name).map(|row| row.id).unwrap();
+        controller.apply(LibraryAction::MoveStructure(id, Some(project)));
+    }
+
+    fn load(controller: &mut StratumController, scope: MaterialScope) {
+        controller.apply(LibraryAction::LoadMaterials(scope));
+        ControllerHarness::tick_until_materials_ready(controller, &Frames::main_menu(1.0));
+    }
+
+    fn tick_stone(controller: &mut StratumController, scope: MaterialScope, gathered: bool) {
+        controller.apply(LibraryAction::SetGathered { scope, item: Self::stone_item(), gathered });
+    }
 }
 
 #[test]
@@ -2526,4 +2560,93 @@ fn marker_row_of_a_single_structure_has_no_part() {
 
     let row = controller.snapshot().markers[0].clone();
     assert_eq!((row.part_name, row.part_position), (None, None));
+}
+
+#[test]
+fn gathered_tick_shows_in_snapshot() {
+    let data = tempfile::tempdir().unwrap();
+    let mut controller = ControllerHarness::start(data.path());
+    let project = Scene::project(&mut controller, data.path(), &[("a", 2)]);
+    let scope = MaterialScope::Project(project);
+    Scene::load(&mut controller, scope);
+    assert!(controller.snapshot().materials_gathered.is_empty());
+
+    Scene::tick_stone(&mut controller, scope, true);
+    assert_eq!(controller.snapshot().materials_gathered, [Scene::stone_item()]);
+    Scene::tick_stone(&mut controller, scope, false);
+    assert!(controller.snapshot().materials_gathered.is_empty());
+}
+
+#[test]
+fn set_gathered_for_unshown_scope_is_ignored() {
+    let data = tempfile::tempdir().unwrap();
+    let mut controller = ControllerHarness::start(data.path());
+    let project = Scene::project(&mut controller, data.path(), &[("a", 2)]);
+    let structure = controller.snapshot().projects[0].structures[0].id;
+    Scene::load(&mut controller, MaterialScope::Structure(structure));
+
+    Scene::tick_stone(&mut controller, MaterialScope::Project(project), true);
+    assert!(controller.snapshot().materials_gathered.is_empty());
+    Scene::load(&mut controller, MaterialScope::Project(project));
+    assert!(controller.snapshot().materials_gathered.is_empty());
+}
+
+#[test]
+fn gathered_ticks_are_kept_per_list() {
+    let data = tempfile::tempdir().unwrap();
+    let mut controller = ControllerHarness::start(data.path());
+    let project = Scene::project(&mut controller, data.path(), &[("a", 2)]);
+    let structure = controller.snapshot().projects[0].structures[0].id;
+    Scene::load(&mut controller, MaterialScope::Project(project));
+    Scene::tick_stone(&mut controller, MaterialScope::Project(project), true);
+
+    Scene::load(&mut controller, MaterialScope::Structure(structure));
+    assert!(controller.snapshot().materials_gathered.is_empty());
+    Scene::load(&mut controller, MaterialScope::Project(project));
+    assert_eq!(controller.snapshot().materials_gathered, [Scene::stone_item()]);
+}
+
+#[test]
+fn gathered_tick_clears_when_count_rises() {
+    let data = tempfile::tempdir().unwrap();
+    let mut controller = ControllerHarness::start(data.path());
+    let project = Scene::project(&mut controller, data.path(), &[("a", 2)]);
+    let scope = MaterialScope::Project(project);
+    Scene::load(&mut controller, scope);
+    Scene::tick_stone(&mut controller, scope, true);
+
+    Scene::add_to(&mut controller, data.path(), project, "b", 3);
+    Scene::load(&mut controller, scope);
+    assert!(controller.snapshot().materials_gathered.is_empty());
+}
+
+#[test]
+fn gathered_tick_stays_when_count_falls() {
+    let data = tempfile::tempdir().unwrap();
+    let mut controller = ControllerHarness::start(data.path());
+    let project = Scene::project(&mut controller, data.path(), &[("a", 2), ("b", 3)]);
+    let scope = MaterialScope::Project(project);
+    Scene::load(&mut controller, scope);
+    Scene::tick_stone(&mut controller, scope, true);
+
+    let b = controller.snapshot().projects[0].structures.iter().find(|row| row.name == "b").unwrap().id;
+    controller.apply(LibraryAction::MoveStructure(b, None));
+    Scene::load(&mut controller, scope);
+    assert_eq!(controller.snapshot().materials_gathered, [Scene::stone_item()]);
+}
+
+#[test]
+fn gathered_ticks_survive_restart() {
+    let data = tempfile::tempdir().unwrap();
+    let mut controller = ControllerHarness::start(data.path());
+    let project = Scene::project(&mut controller, data.path(), &[("a", 2)]);
+    let scope = MaterialScope::Project(project);
+    Scene::load(&mut controller, scope);
+    Scene::tick_stone(&mut controller, scope, true);
+    controller.shutdown();
+    drop(controller);
+
+    let mut next = ControllerHarness::start(data.path());
+    Scene::load(&mut next, scope);
+    assert_eq!(next.snapshot().materials_gathered, [Scene::stone_item()]);
 }

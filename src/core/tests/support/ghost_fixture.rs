@@ -121,7 +121,7 @@ impl GhostFixture {
     // A library with one project (id 1) holding pieces placed at their world origins.
     pub fn library(kind: ProjectKind, pieces: &[(u64, [i32; 3], [u32; 3])]) -> Library {
         let mut library = Library::new();
-        library.projects.push(Project { id: ProjectId(1), name: "project".to_string(), kind });
+        library.projects.push(Project { id: ProjectId(1), name: "project".to_string(), kind, gathered: Vec::new() });
         for (id, origin, size) in pieces {
             let entry = StructureEntry { project: Some(ProjectId(1)), ..PieceFixture::at(*id, *origin, *size) };
             library.structures.push(entry);

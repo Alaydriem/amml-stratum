@@ -49,12 +49,14 @@ impl MaterialsSubject {
         }
     }
 
-    // "38 items · 11,904 blocks · sorted by count".
-    pub fn summary(&self, items: usize) -> Text {
+    // "38 items · 4 gathered · 11,904 blocks · sorted by count".
+    pub fn summary(&self, items: usize, gathered: usize) -> Text {
         let count = u64::try_from(items).unwrap_or(u64::MAX);
         let items = DigitGroups::of(count);
+        let gathered = DigitGroups::of(u64::try_from(gathered).unwrap_or(u64::MAX));
         let args = Args::new()
             .user("items", UserText::from_model(items))
+            .user("gathered", UserText::from_model(gathered))
             .user("blocks", UserText::from_model(DigitGroups::of(self.blocks)));
         Text::plural(StratumMessage::MaterialsSummary, count, args)
     }

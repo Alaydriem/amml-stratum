@@ -1,5 +1,8 @@
 use stratum_core::errors::LibraryError;
+use stratum_core::services::LibraryService;
+use stratum_core::structs::action::MaterialScope;
 use stratum_core::structs::library::{ProjectId, ProjectKind, StructureId};
+use stratum_core::structs::material::{GatheredItem, ItemId, MaterialLine, MaterialList};
 
 use crate::support::{NewStructureFixture, ServiceFactory};
 
@@ -202,4 +205,118 @@ fn order_follows_rename_move_and_delete() {
 
     svc.delete_project(project).unwrap();
     assert!(svc.order().of(project).is_empty());
+}
+
+// Builders for the tick tests.
+struct Ticks;
+
+impl Ticks {
+    fn item(name: &str) -> ItemId {
+        ItemId(format!("minecraft:{name}"))
+    }
+
+    fn list(lines: &[(&str, u64)]) -> MaterialList {
+        MaterialList::new(
+            lines
+                .iter()
+                .map(|(name, count)| MaterialLine { item: Self::item(name), count: *count, stack_size: 64 })
+                .collect(),
+        )
+    }
+
+    fn project_with_structure(svc: &mut LibraryService) -> (ProjectId, StructureId) {
+        let project = svc.create_project("Castle").unwrap();
+        let mut new = NewStructureFixture::named("Tower");
+        new.project = Some(project);
+        let structure = svc.add_structure(new).unwrap();
+        (project, structure)
+    }
+}
+
+#[test]
+fn ticks_are_kept_per_list() {
+    let mut svc = ServiceFactory::with_capacity(10, 10);
+    let (project, structure) = Ticks::project_with_structure(&mut svc);
+    svc.mark_saved();
+
+    svc.set_gathered(MaterialScope::Project(project), Ticks::item("stone"), Some(10)).unwrap();
+    assert!(svc.is_dirty());
+    assert_eq!(svc.gathered(MaterialScope::Project(project)), [GatheredItem { item: Ticks::item("stone"), count: 10 }]);
+    assert!(svc.gathered(MaterialScope::Structure(structure)).is_empty());
+
+    svc.set_gathered(MaterialScope::Project(project), Ticks::item("stone"), Some(12)).unwrap();
+    assert_eq!(svc.gathered(MaterialScope::Project(project)), [GatheredItem { item: Ticks::item("stone"), count: 12 }]);
+
+    svc.set_gathered(MaterialScope::Project(project), Ticks::item("stone"), None).unwrap();
+    assert!(svc.gathered(MaterialScope::Project(project)).is_empty());
+}
+
+#[test]
+fn removing_an_absent_tick_changes_nothing() {
+    let mut svc = ServiceFactory::with_capacity(10, 10);
+    let (project, _) = Ticks::project_with_structure(&mut svc);
+    svc.mark_saved();
+    svc.set_gathered(MaterialScope::Project(project), Ticks::item("stone"), None).unwrap();
+    assert!(!svc.is_dirty());
+}
+
+#[test]
+fn reconcile_clears_raised_and_missing_items() {
+    let mut svc = ServiceFactory::with_capacity(10, 10);
+    let (_, structure) = Ticks::project_with_structure(&mut svc);
+    let scope = MaterialScope::Structure(structure);
+    svc.set_gathered(scope, Ticks::item("stone"), Some(10)).unwrap();
+    svc.set_gathered(scope, Ticks::item("dirt"), Some(5)).unwrap();
+    svc.set_gathered(scope, Ticks::item("glass"), Some(3)).unwrap();
+    svc.mark_saved();
+
+    let now = Ticks::list(&[("stone", 12), ("dirt", 4)]);
+    assert!(svc.reconcile_gathered(scope, &now));
+    assert!(svc.is_dirty());
+    assert_eq!(svc.gathered(scope), [GatheredItem { item: Ticks::item("dirt"), count: 5 }]);
+
+    svc.mark_saved();
+    assert!(!svc.reconcile_gathered(scope, &now));
+    assert!(!svc.is_dirty());
+}
+
+#[test]
+fn gathered_list_is_bounded() {
+    let mut svc = ServiceFactory::with_capacity(10, 10);
+    let (project, _) = Ticks::project_with_structure(&mut svc);
+    let scope = MaterialScope::Project(project);
+    for n in 0..LibraryService::MAX_GATHERED {
+        svc.set_gathered(scope, Ticks::item(&format!("item_{n}")), Some(1)).unwrap();
+    }
+    assert_eq!(
+        svc.set_gathered(scope, Ticks::item("one_more"), Some(1)),
+        Err(LibraryError::Full { capacity: LibraryService::MAX_GATHERED })
+    );
+    assert_eq!(svc.gathered(scope).len(), LibraryService::MAX_GATHERED);
+    assert!(!svc.gathered(scope).iter().any(|tick| tick.item == Ticks::item("one_more")));
+    assert!(svc.set_gathered(scope, Ticks::item("item_0"), Some(2)).is_ok());
+    assert!(svc.set_gathered(scope, Ticks::item("item_1"), None).is_ok());
+    assert!(svc.set_gathered(scope, Ticks::item("one_more"), Some(1)).is_ok());
+}
+
+#[test]
+fn deleting_the_owner_drops_its_ticks() {
+    let mut svc = ServiceFactory::with_capacity(10, 10);
+    let (project, structure) = Ticks::project_with_structure(&mut svc);
+    svc.set_gathered(MaterialScope::Structure(structure), Ticks::item("stone"), Some(1)).unwrap();
+    svc.set_gathered(MaterialScope::Project(project), Ticks::item("stone"), Some(1)).unwrap();
+
+    svc.delete_structure(structure).unwrap();
+    assert!(svc.gathered(MaterialScope::Structure(structure)).is_empty());
+    assert_eq!(
+        svc.set_gathered(MaterialScope::Structure(structure), Ticks::item("stone"), Some(1)),
+        Err(LibraryError::NotFound)
+    );
+
+    svc.delete_project(project).unwrap();
+    assert!(svc.gathered(MaterialScope::Project(project)).is_empty());
+    assert_eq!(
+        svc.set_gathered(MaterialScope::Project(project), Ticks::item("stone"), Some(1)),
+        Err(LibraryError::NotFound)
+    );
 }

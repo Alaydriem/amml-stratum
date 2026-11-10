@@ -1,5 +1,5 @@
 // A namespaced item id such as `minecraft:oak_sign`.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, serde::Serialize, serde::Deserialize)]
 pub struct ItemId(pub String);
 
 impl ItemId {

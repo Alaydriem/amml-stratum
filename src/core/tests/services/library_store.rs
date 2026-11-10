@@ -78,3 +78,21 @@ fn store_non_utf8_file_is_kept_and_load_is_empty() {
     assert_eq!(names.len(), 1);
     assert!(names[0].starts_with("library.hcl.bad-"));
 }
+
+#[test]
+fn library_file_without_gathered_loads() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut svc = LibraryService::new(Library::new(), LibraryConfig::default());
+    let project = svc.create_project("Castle").unwrap();
+    let mut new = NewStructureFixture::named("Tower");
+    new.project = Some(project);
+    svc.add_structure(new).unwrap();
+    let store = LibraryStore::new(dir.path().to_path_buf());
+    store.save(svc.library()).unwrap();
+
+    let text = std::fs::read_to_string(store.path()).unwrap();
+    assert!(!text.contains("gathered"));
+    let loaded = store.load().unwrap();
+    assert!(loaded.projects[0].gathered.is_empty());
+    assert!(loaded.structures[0].gathered.is_empty());
+}

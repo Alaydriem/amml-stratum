@@ -206,8 +206,8 @@ msgid "{name} only"
 msgstr ""
 
 #, python-brace-format
-msgid "{items} item · {blocks} blocks · sorted by count"
-msgid_plural "{items} items · {blocks} blocks · sorted by count"
+msgid "{items} item · {gathered} gathered · {blocks} blocks · sorted by count"
+msgid_plural "{items} items · {gathered} gathered · {blocks} blocks · sorted by count"
 msgstr[0] ""
 msgstr[1] ""
 

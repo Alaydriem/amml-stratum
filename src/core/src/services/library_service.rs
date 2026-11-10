@@ -1,12 +1,15 @@
 use crate::config::LibraryConfig;
 use crate::errors::LibraryError;
+use crate::structs::action::MaterialScope;
 use crate::structs::layout::GridCell;
 use crate::structs::library::{
     Library, NameLimit, NewStructure, Project, ProjectId, ProjectKind, ProjectOrder, StructureEntry, StructureId,
 };
+use crate::structs::material::{GatheredItem, ItemId, MaterialList};
 
 // Holds the library and applies every change to it. Capacity: `max_structures` and
-// `max_projects` from config; an add past either is refused, nothing is evicted.
+// `max_projects` from config; an add past either is refused, nothing is evicted. The ticks of one
+// material list hold at most `MAX_GATHERED` items; a new tick past it is refused.
 pub struct LibraryService {
     library: Library,
     config: LibraryConfig,
@@ -15,6 +18,8 @@ pub struct LibraryService {
 }
 
 impl LibraryService {
+    pub const MAX_GATHERED: usize = 4096;
+
     pub fn new(library: Library, config: LibraryConfig) -> Self {
         let mut order = ProjectOrder::new();
         order.rebuild(&library);
@@ -59,6 +64,7 @@ impl LibraryService {
             block_count: entry.block_count,
             world_origin: entry.world_origin,
             grid_cell: None,
+            gathered: Vec::new(),
         });
         self.touched();
         Ok(StructureId(id))
@@ -105,7 +111,12 @@ impl LibraryService {
         }
         let id = self.library.next_project_id;
         self.library.next_project_id = id.checked_add(1).ok_or(full)?;
-        self.library.projects.push(Project { id: ProjectId(id), name, kind: ProjectKind::Normal });
+        self.library.projects.push(Project {
+            id: ProjectId(id),
+            name,
+            kind: ProjectKind::Normal,
+            gathered: Vec::new(),
+        });
         self.touched();
         Ok(ProjectId(id))
     }
@@ -138,6 +149,62 @@ impl LibraryService {
         Ok(())
     }
 
+    // The ticks of a material list; empty when its project or structure is gone.
+    pub fn gathered(&self, scope: MaterialScope) -> &[GatheredItem] {
+        match scope {
+            MaterialScope::Project(id) => {
+                self.library.projects.iter().find(|project| project.id == id).map_or(&[], |p| p.gathered.as_slice())
+            }
+            MaterialScope::Structure(id) => {
+                self.library.structures.iter().find(|entry| entry.id == id).map_or(&[], |e| e.gathered.as_slice())
+            }
+        }
+    }
+
+    // `Some(count)` ticks the item with the count the list needs now; `None` clears the tick.
+    pub fn set_gathered(&mut self, scope: MaterialScope, item: ItemId, count: Option<u64>) -> Result<(), LibraryError> {
+        let ticks = self.gathered_mut(scope)?;
+        let found = ticks.iter().position(|tick| tick.item == item);
+        let changed = match (found, count) {
+            (Some(index), Some(count)) => {
+                let changed = ticks[index].count != count;
+                ticks[index].count = count;
+                changed
+            }
+            (Some(index), None) => {
+                ticks.remove(index);
+                true
+            }
+            (None, Some(count)) => {
+                if ticks.len() >= Self::MAX_GATHERED {
+                    return Err(LibraryError::Full { capacity: Self::MAX_GATHERED });
+                }
+                ticks.push(GatheredItem { item, count });
+                true
+            }
+            (None, None) => false,
+        };
+        if changed {
+            self.touched();
+        }
+        Ok(())
+    }
+
+    // Drops the ticks whose item left `list` or whose needed count rose past the ticked count.
+    // True when a tick was dropped.
+    pub fn reconcile_gathered(&mut self, scope: MaterialScope, list: &MaterialList) -> bool {
+        let Ok(ticks) = self.gathered_mut(scope) else {
+            return false;
+        };
+        let before = ticks.len();
+        ticks.retain(|tick| list.lines().iter().any(|line| line.item == tick.item && line.count <= tick.count));
+        let dropped = ticks.len() != before;
+        if dropped {
+            self.touched();
+        }
+        dropped
+    }
+
     // Sorted by display name, ignoring case. `None` lists the Unsorted structures.
     pub fn structures_in(&self, project: Option<ProjectId>) -> Vec<&StructureEntry> {
         let mut found: Vec<&StructureEntry> =
@@ -149,6 +216,19 @@ impl LibraryService {
     fn touched(&mut self) {
         self.order.rebuild(&self.library);
         self.dirty = true;
+    }
+
+    fn gathered_mut(&mut self, scope: MaterialScope) -> Result<&mut Vec<GatheredItem>, LibraryError> {
+        match scope {
+            MaterialScope::Project(id) => {
+                let index = self.project_index(id)?;
+                Ok(&mut self.library.projects[index].gathered)
+            }
+            MaterialScope::Structure(id) => {
+                let index = self.structure_index(id)?;
+                Ok(&mut self.library.structures[index].gathered)
+            }
+        }
     }
 
     fn structure_index(&self, id: StructureId) -> Result<usize, LibraryError> {

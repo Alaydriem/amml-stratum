@@ -1,3 +1,4 @@
+pub mod gathered_item;
 pub mod item_id;
 pub mod item_yield;
 pub mod material_line;
@@ -6,6 +7,7 @@ pub mod stack_count;
 pub mod structure_load;
 pub mod structure_loaded;
 
+pub use gathered_item::GatheredItem;
 pub use item_id::ItemId;
 pub use item_yield::ItemYield;
 pub use material_line::MaterialLine;

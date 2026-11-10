@@ -24,7 +24,12 @@ impl TargetBuild {
             .map(|bytes| Arc::new(StructureParser::parse(bytes).unwrap()))
             .collect();
         let mut library = Library::new();
-        library.projects.push(Project { id: ProjectId(1), name: "target".to_string(), kind: ProjectKind::BigBuild });
+        library.projects.push(Project {
+            id: ProjectId(1),
+            name: "target".to_string(),
+            kind: ProjectKind::BigBuild,
+            gathered: Vec::new(),
+        });
         let mut loaded = HashMap::new();
         for (index, piece) in pieces.iter().enumerate() {
             let id = index as u64 + 1;

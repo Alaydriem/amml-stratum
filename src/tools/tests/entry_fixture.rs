@@ -15,6 +15,7 @@ impl EntryFixture {
             block_count: structure.block_count(),
             world_origin: structure.world_origin,
             grid_cell: None,
+            gathered: Vec::new(),
         }
     }
 }

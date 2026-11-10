@@ -1,6 +1,7 @@
 use egui::OutputCommand;
 use stratum_core::structs::action::{LibraryAction, MaterialScope};
 use stratum_core::structs::library::{ProjectId, ProjectKind, StructureId};
+use stratum_core::structs::material::ItemId;
 use stratum_ui::state::{Page, ProjectTab, StructureTab};
 
 use crate::support::{ShapeProbe, SnapshotFixture, ViewSession};
@@ -19,6 +20,12 @@ impl Sessions {
             session.frame(Vec::new());
         }
         session
+    }
+
+    // The centre of the checkbox in the row of `name`: the box sits at the start of the lane before the name.
+    fn checkbox_of(session: &ViewSession, name: &str) -> egui::Pos2 {
+        let rect = ShapeProbe::text_rect(&session.shapes, name).expect("row is painted");
+        egui::pos2(rect.left() - 24.0, rect.center().y)
     }
 }
 
@@ -234,4 +241,75 @@ fn big_build_switch_pushes_set_project_kind() {
     let spot = egui::pos2(label.right() + 12.0 + 17.0, label.center().y + 8.0);
     session.click(spot);
     assert_eq!(session.actions, [LibraryAction::SetProjectKind(WILLOW, ProjectKind::BigBuild)]);
+}
+
+#[test]
+fn clicking_a_checkbox_ticks_the_item() {
+    let mut session = Sessions::materials_tab(SnapshotFixture::library_with_materials());
+    let spot = Sessions::checkbox_of(&session, "Stone Bricks");
+    session.click(spot);
+    assert_eq!(
+        session.actions,
+        [LibraryAction::SetGathered {
+            scope: MaterialScope::Project(WILLOW),
+            item: ItemId("minecraft:stone_bricks".to_owned()),
+            gathered: true,
+        }]
+    );
+}
+
+#[test]
+fn clicking_a_ticked_checkbox_clears_the_tick() {
+    let mut snapshot = SnapshotFixture::library_with_materials();
+    snapshot.materials_gathered = vec![ItemId("minecraft:lantern".to_owned())];
+    let mut session = Sessions::materials_tab(snapshot);
+    let spot = Sessions::checkbox_of(&session, "Lantern");
+    session.click(spot);
+    assert_eq!(
+        session.actions,
+        [LibraryAction::SetGathered {
+            scope: MaterialScope::Project(WILLOW),
+            item: ItemId("minecraft:lantern".to_owned()),
+            gathered: false,
+        }]
+    );
+}
+
+#[test]
+fn summary_counts_gathered_items_of_the_whole_list() {
+    let mut snapshot = SnapshotFixture::library_with_materials();
+    snapshot.materials_gathered = vec![ItemId("minecraft:lantern".to_owned())];
+    let mut session = Sessions::materials_tab(snapshot);
+    assert!(ShapeProbe::text_rect(&session.shapes, "4 items · 1 gathered · ").is_some());
+    session.state.filter = "stone".to_owned();
+    session.frame(Vec::new());
+    session.frame(Vec::new());
+    assert!(ShapeProbe::text_rect(&session.shapes, "4 items · 1 gathered · ").is_some());
+}
+
+#[test]
+fn clicking_the_row_name_ticks_the_item() {
+    let mut session = Sessions::materials_tab(SnapshotFixture::library_with_materials());
+    let spot = ShapeProbe::text_centre(&session.shapes, "Stone Bricks").expect("row is painted");
+    session.click(spot);
+    assert_eq!(
+        session.actions,
+        [LibraryAction::SetGathered {
+            scope: MaterialScope::Project(WILLOW),
+            item: ItemId("minecraft:stone_bricks".to_owned()),
+            gathered: true,
+        }]
+    );
+}
+
+#[test]
+fn a_read_only_library_cannot_tick() {
+    let mut snapshot = SnapshotFixture::library_with_materials();
+    snapshot.library_read_only = true;
+    let mut session = Sessions::materials_tab(snapshot);
+    let spot = Sessions::checkbox_of(&session, "Stone Bricks");
+    session.click(spot);
+    let spot = ShapeProbe::text_centre(&session.shapes, "Stone Bricks").expect("row is painted");
+    session.click(spot);
+    assert!(session.actions.is_empty(), "{:?}", session.actions);
 }

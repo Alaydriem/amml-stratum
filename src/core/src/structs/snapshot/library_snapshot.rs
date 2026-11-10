@@ -2,7 +2,7 @@ use super::{HudRow, ImportNotice, ImportPick, MarkerRow, ProjectRow, StructureRo
 use crate::structs::action::MaterialScope;
 use crate::structs::layout::{BigBuildLayout, LayoutIssue};
 use crate::structs::library::ProjectId;
-use crate::structs::material::MaterialList;
+use crate::structs::material::{ItemId, MaterialList};
 
 // An immutable view of the library for the UI. `revision` grows with every change.
 #[derive(Debug, Clone, PartialEq)]
@@ -22,6 +22,8 @@ pub struct LibrarySnapshot {
     pub materials_loading: Option<MaterialScope>,
     // The scope whose list could not be made; cleared when a new load starts or a list arrives.
     pub materials_failed: Option<MaterialScope>,
+    // The ticked items of the list in `materials`; empty without a list.
+    pub materials_gathered: Vec<ItemId>,
     pub notices: Vec<ImportNotice>,
     pub picker_pending: bool,
     // The most recent file picker import. `None` until a picker answer imports.
@@ -48,6 +50,7 @@ impl LibrarySnapshot {
             materials: None,
             materials_loading: None,
             materials_failed: None,
+            materials_gathered: Vec::new(),
             notices: Vec::new(),
             picker_pending: false,
             latest_pick: None,

@@ -1,5 +1,6 @@
 use super::{ProjectId, StructureId};
 use crate::structs::layout::GridCell;
+use crate::structs::material::GatheredItem;
 use crate::structs::structure::StructureSize;
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -16,4 +17,6 @@ pub struct StructureEntry {
     pub world_origin: Option<[i32; 3]>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub grid_cell: Option<GridCell>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub gathered: Vec<GatheredItem>,
 }

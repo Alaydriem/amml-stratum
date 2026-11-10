@@ -19,6 +19,7 @@ impl PieceFixture {
             block_count: 1,
             world_origin: Some(origin),
             grid_cell: None,
+            gathered: Vec::new(),
         }
     }
 

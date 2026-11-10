@@ -1,5 +1,5 @@
 use amml_i18n::localize::Localizer;
-use stratum_core::structs::material::StackCount;
+use stratum_core::structs::material::{ItemId, StackCount};
 use stratum_ui::presenter::{DigitGroups, MaterialRows, StackText};
 
 use crate::support::SnapshotFixture;
@@ -7,24 +7,24 @@ use crate::support::SnapshotFixture;
 #[test]
 fn rows_follow_list_order() {
     let names: Vec<String> =
-        MaterialRows::build(&SnapshotFixture::list(), "").into_iter().map(|row| row.name).collect();
+        MaterialRows::build(&SnapshotFixture::list(), &[], "").into_iter().map(|row| row.name).collect();
     assert_eq!(names, ["Stone Bricks", "Spruce Planks", "Deepslate Tiles", "Lantern"]);
 }
 
 #[test]
 fn filter_is_case_insensitive_substring() {
     let names: Vec<String> =
-        MaterialRows::build(&SnapshotFixture::list(), "SPRUCE").into_iter().map(|row| row.name).collect();
+        MaterialRows::build(&SnapshotFixture::list(), &[], "SPRUCE").into_iter().map(|row| row.name).collect();
     assert_eq!(names, ["Spruce Planks"]);
     let names: Vec<String> =
-        MaterialRows::build(&SnapshotFixture::list(), "ric").into_iter().map(|row| row.name).collect();
+        MaterialRows::build(&SnapshotFixture::list(), &[], "ric").into_iter().map(|row| row.name).collect();
     assert_eq!(names, ["Stone Bricks"]);
-    assert!(MaterialRows::build(&SnapshotFixture::list(), "obsidian").is_empty());
+    assert!(MaterialRows::build(&SnapshotFixture::list(), &[], "obsidian").is_empty());
 }
 
 #[test]
 fn rows_carry_count_and_stacks() {
-    let rows = MaterialRows::build(&SnapshotFixture::list(), "");
+    let rows = MaterialRows::build(&SnapshotFixture::list(), &[], "");
     assert_eq!(rows[0].count, 3412);
     assert_eq!(rows[0].stacks, StackCount { stacks: 53, rest: 20 });
     assert_eq!(rows[0].stack_size, 64);
@@ -49,4 +49,17 @@ fn digits_are_grouped_by_three() {
         grouped,
         ["0", "7", "999", "1,000", "4,212", "11,904", "1,000,000", "1,234,567", "18,446,744,073,709,551,615"]
     );
+}
+
+#[test]
+fn rows_carry_item_and_gathered_flag() {
+    let gathered = [ItemId("minecraft:spruce_planks".to_owned())];
+    let rows = MaterialRows::build(&SnapshotFixture::list(), &gathered, "spruce");
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].item, gathered[0]);
+    assert!(rows[0].gathered);
+    let rows = MaterialRows::build(&SnapshotFixture::list(), &gathered, "");
+    assert_eq!(rows[0].name, "Stone Bricks");
+    assert!(!rows[0].gathered);
+    assert!(rows[1].gathered);
 }

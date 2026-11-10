@@ -4,6 +4,7 @@ use super::MaterialScope;
 use crate::structs::layout::GridCell;
 use crate::structs::library::{ProjectId, ProjectKind, StructureId};
 use crate::structs::marker::{MarkerId, MarkerTarget};
+use crate::structs::material::ItemId;
 
 // One change the UI asks the controller to make.
 #[derive(Debug, Clone, PartialEq)]
@@ -27,4 +28,6 @@ pub enum LibraryAction {
     AssignMarker(MarkerId, MarkerTarget),
     DeleteMarker(MarkerId),
     LoadMaterials(MaterialScope),
+    // Ticks or clears an item of the material list shown for `scope`.
+    SetGathered { scope: MaterialScope, item: ItemId, gathered: bool },
 }

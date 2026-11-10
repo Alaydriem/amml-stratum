@@ -22,7 +22,7 @@ use crate::structs::import::{ImportFailure, ImportRequest, ImportResult};
 use crate::structs::layout::{BigBuildLayout, LayoutIssue};
 use crate::structs::library::{Library, NewStructure, Project, ProjectId, ProjectKind, StructureEntry, StructureId};
 use crate::structs::marker::{Marker, MarkerSet, MarkerTarget, Rotation, WorldKey};
-use crate::structs::material::{ItemId, MaterialList, StructureLoad, StructureLoaded};
+use crate::structs::material::{GatheredItem, ItemId, MaterialList, StructureLoad, StructureLoaded};
 use crate::structs::snapshot::{
     HudRow, ImportNotice, ImportPick, LibrarySnapshot, MarkerRow, ProjectRow, StructureRow,
 };
@@ -323,6 +323,7 @@ impl StratumController {
             }
             LibraryAction::DeleteMarker(id) => self.change_markers(|markers| markers.delete(id)),
             LibraryAction::LoadMaterials(scope) => self.load_materials(scope),
+            LibraryAction::SetGathered { scope, item, gathered } => self.set_gathered(scope, item, gathered),
         }
         self.refresh();
     }
@@ -1092,8 +1093,33 @@ impl StratumController {
             return;
         }
         let lists: Vec<&MaterialList> = job.lists.iter().collect();
+        let list = MaterialList::merge(&lists);
+        if self.library.reconcile_gathered(job.scope, &list) {
+            self.library_changed = true;
+            self.changed = true;
+        }
         self.materials_failed = None;
-        self.materials = Some((job.scope, MaterialList::merge(&lists)));
+        self.materials = Some((job.scope, list));
+    }
+
+    // A tick saves the count the shown list needs now. A tick for a list that is not shown is ignored.
+    fn set_gathered(&mut self, scope: MaterialScope, item: ItemId, gathered: bool) {
+        let count = match &self.materials {
+            Some((shown, list)) if *shown == scope => {
+                list.lines().iter().find(|line| line.item == item).map(|line| line.count)
+            }
+            _ => None,
+        };
+        let Some(count) = count else {
+            return;
+        };
+        let result = self.library.set_gathered(scope, item, gathered.then_some(count));
+        self.library_outcome(result);
+    }
+
+    // The ticks of the shown list; empty without a list.
+    fn shown_gathered(&self) -> &[GatheredItem] {
+        self.materials.as_ref().map_or(&[], |(scope, _)| self.library.gathered(*scope))
     }
 
     // Takes the structures the materials worker finished reading.
@@ -1390,6 +1416,8 @@ impl StratumController {
         snapshot.materials.clone_from(&self.materials);
         snapshot.materials_loading = self.materials_job.as_ref().map(|job| job.scope);
         snapshot.materials_failed = self.materials_failed;
+        snapshot.materials_gathered.clear();
+        snapshot.materials_gathered.extend(self.shown_gathered().iter().map(|tick| tick.item.clone()));
         snapshot.notices = self.notices.iter().map(|(_, notice)| notice.clone()).collect();
         snapshot.picker_pending = self.picker_pending || self.picker_open;
         snapshot.latest_pick.clone_from(&self.latest_pick);
@@ -1405,6 +1433,7 @@ impl StratumController {
             && snapshot.materials == self.materials
             && snapshot.materials_loading == self.materials_job.as_ref().map(|job| job.scope)
             && snapshot.materials_failed == self.materials_failed
+            && snapshot.materials_gathered.iter().eq(self.shown_gathered().iter().map(|tick| &tick.item))
             && snapshot.notices.iter().eq(self.notices.iter().map(|(_, notice)| notice))
             && snapshot.picker_pending == (self.picker_pending || self.picker_open)
             && snapshot.latest_pick == self.latest_pick

@@ -2,13 +2,14 @@ use amml_i18n::text::{Text, UserText};
 use amml_ui::draw::{Draw, TextFit, TextStyle, TypeSize};
 use amml_ui::font::FontFace;
 use amml_ui::icon::Icon;
-use amml_ui::state::DisabledReason;
+use amml_ui::state::{DisabledReason, Selection};
 use amml_ui::text::UiText;
 use amml_ui::tokens::rule::Elevation;
 use amml_ui::tokens::{ColorToken, SpacingToken, color, spacing};
 use amml_ui::widget::{
-    Banner, BannerTone, ButtonKind, Caption, EmptyState, LoadingKind, LoadingState, ScrollBar, Surface, SurfaceLevel,
-    TableAlign, TableColumn, TableHeader, TableRow, TableRowKind, TableRowSize, TextButton, TextField, TextFieldKind,
+    Banner, BannerTone, ButtonKind, Caption, Checkbox, EmptyState, LoadingKind, LoadingState, ScrollBar, Surface,
+    SurfaceLevel, TableAlign, TableColumn, TableHeader, TableRow, TableRowKind, TableRowSize, TextButton, TextField,
+    TextFieldKind,
 };
 use egui::{Align, Align2, Id, Layout, ScrollArea, Sense, Ui, UiBuilder, vec2};
 use stratum_core::structs::action::{LibraryAction, MaterialScope};
@@ -35,7 +36,7 @@ impl MaterialsTab {
     const STACKS_WIDTH: f32 = 200.0;
     /// Paper: Mod manager, `Widget / Table header + Table row`: the inset at each side of a row.
     const ROW_INSET: f32 = 18.0;
-    const ALIGNS: [TableAlign; 3] = [TableAlign::Start, TableAlign::End, TableAlign::End];
+    const ALIGNS: [TableAlign; 4] = [TableAlign::Start, TableAlign::Start, TableAlign::End, TableAlign::End];
     const HEADING: TextStyle = TextStyle::new(TypeSize::Body, FontFace::Semibold);
     const SUMMARY: TextStyle = TextStyle::new(TypeSize::Caption, FontFace::Regular);
     const CELL: TextStyle = TextStyle::new(TypeSize::Body, FontFace::Regular);
@@ -51,7 +52,9 @@ impl MaterialsTab {
         let key = (scope, snapshot.revision, state.filter.clone());
         if self.key.as_ref() != Some(&key) {
             self.rows = match &snapshot.materials {
-                Some((listed, list)) if *listed == scope => MaterialRows::build(list, &state.filter),
+                Some((listed, list)) if *listed == scope => {
+                    MaterialRows::build(list, &snapshot.materials_gathered, &state.filter)
+                }
                 _ => Vec::new(),
             };
             self.key = Some(key);
@@ -96,10 +99,13 @@ impl MaterialsTab {
         if self.key.as_ref().is_some_and(|(_, _, filter)| *filter != state.filter) {
             state.copy_too_large = false;
         }
-        let item_count = list.map(|list| list.lines().len());
+        let counts = list.map(|list| {
+            let gathered = list.lines().iter().filter(|line| snapshot.materials_gathered.contains(&line.item)).count();
+            (list.lines().len(), gathered)
+        });
         self.rows(snapshot, state, scope);
 
-        self.show_toolbar(ui, state, subject, item_count);
+        self.show_toolbar(ui, state, subject, counts);
         if state.copy_too_large {
             ui.add_space(<spacing::M as SpacingToken>::VALUE);
             Banner::new(BannerTone::Warning, Text::message(StratumMessage::CopyTooLarge))
@@ -126,10 +132,17 @@ impl MaterialsTab {
             LoadingState::new(LoadingKind::Inline(Text::message(StratumMessage::MaterialsLoading))).show(ui);
             return;
         }
-        self.show_table(ui, state);
+        self.show_table(ui, state, scope, !snapshot.library_read_only, out);
     }
 
-    fn show_toolbar(&self, ui: &mut Ui, state: &mut LibraryUiState, subject: &MaterialsSubject, items: Option<usize>) {
+    // `counts` is the item count and the gathered count of the whole list, before the filter.
+    fn show_toolbar(
+        &self,
+        ui: &mut Ui,
+        state: &mut LibraryUiState,
+        subject: &MaterialsSubject,
+        counts: Option<(usize, usize)>,
+    ) {
         let gap = <spacing::M as SpacingToken>::VALUE;
         let height = <spacing::Button as SpacingToken>::VALUE;
         let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), height), Sense::hover());
@@ -156,15 +169,23 @@ impl MaterialsTab {
         let text = <color::Text as ColorToken>::VALUE;
         let heading = subject.heading();
         Draw::text(painter, rect.left_top(), Align2::LEFT_TOP, &heading, Self::HEADING, text, TextFit::Truncate(room));
-        if let Some(items) = items {
+        if let Some((items, gathered)) = counts {
             let faint = <color::TextFaint as ColorToken>::VALUE;
             let below = rect.left_top() + vec2(0.0, TypeSize::Body.line_height());
-            let summary = subject.summary(items);
+            let summary = subject.summary(items, gathered);
             Draw::text(painter, below, Align2::LEFT_TOP, &summary, Self::SUMMARY, faint, TextFit::Truncate(room));
         }
     }
 
-    fn show_table(&self, ui: &mut Ui, state: &LibraryUiState) {
+    // A click on a row or on its checkbox toggles the tick, unless the library is read only (`editable` false).
+    fn show_table(
+        &self,
+        ui: &mut Ui,
+        state: &LibraryUiState,
+        scope: MaterialScope,
+        editable: bool,
+        out: &mut Vec<LibraryAction>,
+    ) {
         let frame = Surface::frame(SurfaceLevel::Raised, Elevation::Flat).inner_margin(egui::Margin::ZERO);
         let room = ui.available_height();
         frame.show(ui, |ui| {
@@ -172,10 +193,15 @@ impl MaterialsTab {
             ui.set_min_height(room);
             ui.spacing_mut().item_spacing = egui::Vec2::ZERO;
             let inner = (ui.available_width() - 2.0 * Self::ROW_INSET).max(1.0);
+            // the checkbox and the gap before the item name, both `--spacing-l`
+            let lane = 2.0 * <spacing::L as SpacingToken>::VALUE;
+            let check = TableColumn { width_fraction: lane / inner };
             let count = TableColumn { width_fraction: Self::COUNT_WIDTH / inner };
             let stacks = TableColumn { width_fraction: Self::STACKS_WIDTH / inner };
-            let item = TableColumn { width_fraction: (1.0 - count.width_fraction - stacks.width_fraction).max(0.0) };
+            let fixed = check.width_fraction + count.width_fraction + stacks.width_fraction;
+            let item = TableColumn { width_fraction: (1.0 - fixed).max(0.0) };
             TableHeader::new(vec![
+                (Text::user(UserText::from_model(String::new())), check),
                 (Text::message(StratumMessage::ColumnItem), item),
                 (Text::message(StratumMessage::ColumnCount), count),
                 (Text::message(StratumMessage::ColumnStacks), stacks),
@@ -192,32 +218,44 @@ impl MaterialsTab {
                 Caption::new(Text::message(message)).show(ui);
                 return;
             }
-            let columns = [item, count, stacks];
+            let columns = [check, item, count, stacks];
             let area = ScrollArea::vertical().id_salt(StratumId::MaterialsScroll).auto_shrink([false, false]);
             ScrollBar::show(ui, area, false, |ui| {
                 for row in &self.rows {
-                    TableRow::new(&columns, TableRowKind::Plain)
+                    let mut toggled = false;
+                    let response = TableRow::new(&columns, TableRowKind::Plain)
                         .size(TableRowSize::Compact)
                         .aligns(&Self::ALIGNS)
-                        .show(ui, |index, cell| Self::paint_cell(cell, index, row));
+                        .show(ui, |index, cell| toggled |= Self::show_cell(cell, index, row, editable));
+                    if editable && (toggled || response.clicked()) {
+                        out.push(LibraryAction::SetGathered { scope, item: row.item.clone(), gathered: !row.gathered });
+                    }
                 }
             });
         });
     }
 
-    // Column 0 is the item name at the left, column 1 the count and column 2 the stacks, both at the right.
-    fn paint_cell(ui: &mut Ui, index: usize, row: &MaterialRow) {
+    // Column 0 is the gathered checkbox, column 1 the item name at the left, column 2 the count and column 3 the
+    // stacks, both at the right. A gathered row paints its name and count faint.
+    // True when the checkbox was clicked.
+    fn show_cell(ui: &mut Ui, index: usize, row: &MaterialRow, editable: bool) -> bool {
+        if index == 0 {
+            let mut selection = if row.gathered { Selection::On } else { Selection::Off };
+            let reason = DisabledReason::message(StratumMessage::ReadOnlyReason);
+            return Checkbox::new(&mut selection).enabled(editable, reason).show(ui).changed();
+        }
         let cell = ui.max_rect();
         let painter = ui.painter();
-        let text = <color::Text as ColorToken>::VALUE;
+        let text =
+            if row.gathered { <color::TextFaint as ColorToken>::VALUE } else { <color::Text as ColorToken>::VALUE };
         let dim = <color::TextDim as ColorToken>::VALUE;
         match index {
-            0 => {
+            1 => {
                 let name = Text::user(UserText::from_model(row.name.clone()));
                 let fit = TextFit::Truncate(cell.width());
                 Draw::text(painter, cell.left_center(), Align2::LEFT_CENTER, &name, Self::CELL, text, fit);
             }
-            1 => {
+            2 => {
                 let count = Text::user(UserText::from_model(DigitGroups::of(row.count)));
                 Draw::text(painter, cell.right_center(), Align2::RIGHT_CENTER, &count, Self::CELL, text, TextFit::Line);
             }
@@ -227,6 +265,7 @@ impl MaterialsTab {
                 Draw::text(painter, at, Align2::RIGHT_CENTER, &stacks, Self::CELL_DIM, dim, TextFit::Line);
             }
         }
+        false
     }
 }
 

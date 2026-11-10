@@ -10,7 +10,7 @@ struct English;
 impl English {
     fn render(filter: &str, heading: &str) -> String {
         let english = Localizer::english();
-        let rows = MaterialRows::build(&SnapshotFixture::list(), filter);
+        let rows = MaterialRows::build(&SnapshotFixture::list(), &[], filter);
         MaterialClipboard::render(&rows, heading, |text: &Text| text.resolve(&english).into_owned())
     }
 }
