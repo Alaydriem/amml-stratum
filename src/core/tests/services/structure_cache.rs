@@ -4,6 +4,7 @@ use std::sync::Arc;
 use stratum_core::errors::StructureError;
 use stratum_core::services::{StructureCache, StructureParser};
 use stratum_core::structs::library::StructureId;
+use stratum_core::structs::nbt::NbtTag;
 
 use crate::support::{ControllerHarness, StructureFixture};
 
@@ -117,4 +118,29 @@ fn charged_bytes_count_against_the_budget_and_evict_entries() {
 
     cache.set_charged(0);
     assert_eq!(cache.resident_bytes(), one);
+}
+
+#[test]
+fn block_entity_nbt_counts_toward_the_cache_bytes() {
+    let dir = tempfile::tempdir().unwrap();
+    let chests =
+        || StructureFixture::new([2, 1, 1]).block(0, 0, 0, "minecraft:chest").block(1, 0, 0, "minecraft:chest");
+    let text = "x".repeat(4096);
+    let plain = ControllerHarness::picked_file(dir.path(), "plain.mcstructure", &chests().bytes());
+    let filled = ControllerHarness::picked_file(
+        dir.path(),
+        "filled.mcstructure",
+        &chests().block_entity(0, 0, 0, vec![("CustomName", NbtTag::String(text.clone()))]).bytes(),
+    );
+    let mut cache = StructureCache::new(u64::MAX);
+    cache.get_or_load(StructureId(1), &plain).unwrap();
+    let plain_bytes = cache.resident_bytes();
+    cache.evict(StructureId(1));
+    cache.get_or_load(StructureId(2), &filled).unwrap();
+
+    assert!(
+        cache.resident_bytes() >= plain_bytes + text.len() as u64,
+        "with block entities {} bytes, without {plain_bytes}",
+        cache.resident_bytes()
+    );
 }

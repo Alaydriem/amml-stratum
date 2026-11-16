@@ -86,12 +86,15 @@ impl StructureCache {
         self.charged_bytes
     }
 
-    // The structure header, the palette with the text it owns, the dense primary layer and the
-    // sparse secondary layer.
+    // The structure header, the palette with the text it owns, the dense primary layer, the
+    // sparse secondary layer and the block entity NBT.
     fn bytes_of(structure: &Structure) -> u64 {
         let palette: u64 = structure.palette.iter().map(Self::block_bytes).sum();
         let indices = structure.primary.heap_bytes().saturating_add(structure.secondary.heap_bytes());
-        (std::mem::size_of::<Structure>() as u64).saturating_add(palette).saturating_add(indices)
+        (std::mem::size_of::<Structure>() as u64)
+            .saturating_add(palette)
+            .saturating_add(indices)
+            .saturating_add(structure.block_entities.heap_bytes())
     }
 
     fn block_bytes(block: &BlockState) -> u64 {

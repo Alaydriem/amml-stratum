@@ -40,7 +40,7 @@ impl SampleBuilder {
         ["minecraft:bamboo_block", "minecraft:stripped_bamboo_block", "minecraft:bamboo_planks"],
     ];
     // Every leaves block, one column each.
-    const LEAVES: [&'static str; 11] = [
+    const LEAVES: [&'static str; 14] = [
         "minecraft:oak_leaves",
         "minecraft:spruce_leaves",
         "minecraft:birch_leaves",
@@ -52,12 +52,103 @@ impl SampleBuilder {
         "minecraft:pale_oak_leaves",
         "minecraft:azalea_leaves",
         "minecraft:azalea_leaves_flowered",
+        "minecraft:orange_poplar_leaves",
+        "minecraft:red_poplar_leaves",
+        "minecraft:yellow_poplar_leaves",
     ];
     // The plants on the tint sample's grass row, with a bare grass block between each.
     const PLANTS: [&'static str; 3] = ["minecraft:short_grass", "minecraft:fern", "minecraft:stone"];
     const GRASS_BLOCK: &'static str = "minecraft:grass_block";
     // Cells between two columns of the tint sample, so every face of a block shows.
     const TINT_GAP: usize = 2;
+    // The rows of the render check sample on z, one suspect group each. Stone heads every row as the control.
+    const RENDER_CHECK: [&'static [&'static str]; 7] = [
+        // translucent, drawn in the blend layer
+        &[
+            "minecraft:honey_block",
+            "minecraft:slime",
+            "minecraft:glass",
+            "minecraft:white_stained_glass",
+            "minecraft:tinted_glass",
+            "minecraft:ice",
+            "minecraft:packed_ice",
+            "minecraft:honeycomb_block",
+        ],
+        // drawn by a block entity renderer, not the block tessellator
+        &[
+            "minecraft:chest",
+            "minecraft:ender_chest",
+            "minecraft:undyed_shulker_box",
+            "minecraft:bed",
+            "minecraft:standing_banner",
+            "minecraft:standing_sign",
+            "minecraft:skeleton_skull",
+            "minecraft:bell",
+            "minecraft:conduit",
+            "minecraft:decorated_pot",
+            "minecraft:enchanting_table",
+            "minecraft:lectern",
+        ],
+        // blocks added in recent versions, likely built by the newer tessellation pipeline
+        &[
+            "minecraft:crafter",
+            "minecraft:copper_bulb",
+            "minecraft:trial_spawner",
+            "minecraft:vault",
+            "minecraft:heavy_core",
+            "minecraft:chiseled_bookshelf",
+            "minecraft:creaking_heart",
+            "minecraft:resin_block",
+            "minecraft:sculk_sensor",
+            "minecraft:calibrated_sculk_sensor",
+            "minecraft:pointed_dripstone",
+            "minecraft:amethyst_cluster",
+        ],
+        // odd shapes and alpha-tested textures
+        &[
+            "minecraft:scaffolding",
+            "minecraft:web",
+            "minecraft:lantern",
+            "minecraft:chain",
+            "minecraft:end_rod",
+            "minecraft:lightning_rod",
+            "minecraft:azalea",
+            "minecraft:spore_blossom",
+            "minecraft:bamboo",
+            "minecraft:kelp",
+            "minecraft:campfire",
+            "minecraft:brewing_stand",
+        ],
+        // liquids, portals and special render layers
+        &[
+            "minecraft:water",
+            "minecraft:lava",
+            "minecraft:powder_snow",
+            "minecraft:portal",
+            "minecraft:end_portal_frame",
+            "minecraft:mob_spawner",
+            "minecraft:beacon",
+            "minecraft:cauldron",
+            "minecraft:hopper",
+            "minecraft:anvil",
+            "minecraft:grindstone",
+            "minecraft:stonecutter_block",
+        ],
+        // full opaque cubes that should always draw, then a rail, whose block type overrides the render layer by
+        // position
+        &[
+            "minecraft:oak_planks",
+            "minecraft:copper_block",
+            "minecraft:diamond_block",
+            "minecraft:obsidian",
+            "minecraft:sea_lantern",
+            "minecraft:glowstone",
+            "minecraft:rail",
+        ],
+        // every leaves block: each has a biome or fixed tint, and some draw on a Seasons layer
+        &Self::LEAVES,
+    ];
+    const CONTROL: &'static str = "minecraft:stone";
 
     // The 128 x 64 x 128 build.
     pub fn large() -> Result<Vec<u8>, NbtWriteError> {
@@ -142,16 +233,387 @@ impl SampleBuilder {
                 _ => Self::NONE,
             }
         };
-        Self::encode_with(size, [1000, 64, 4000], Self::plain_palette(&names), cell)
+        Self::encode_with(size, [1000, 64, 4000], Self::plain_palette(&names), NbtCompound::default(), cell)
     }
 
-    // Every sample with the file name it is written under: `large.mcstructure`,
-    // `standard.mcstructure`, `tint.mcstructure`, `piece-<px>-<pz>.mcstructure`, then `target-piece-<i>.mcstructure`.
+    // One block of each suspect group per column on x, with TINT_GAP cells between, for finding the blocks the
+    // in-world ghost does not draw. Each row on z is one group of RENDER_CHECK, and column 0 of every row is stone.
+    // One layer high, every block in its default states.
+    pub fn render_check() -> Result<Vec<u8>, NbtWriteError> {
+        let mut entries: Vec<(&str, Vec<(&str, NbtTag)>)> = vec![(Self::CONTROL, vec![])];
+        let rows: Vec<Vec<i32>> = Self::RENDER_CHECK
+            .iter()
+            .map(|row| {
+                let mut ids = vec![0];
+                for name in row.iter() {
+                    entries.push((name, vec![]));
+                    ids.push(entries.len() as i32 - 1);
+                }
+                ids
+            })
+            .collect();
+        let step = Self::TINT_GAP + 1;
+        let entity_row = rows.len() * step;
+        let origin = [1000, 64, 5000];
+        let mut extra: Vec<(usize, usize, i32)> = Vec::new();
+        let mut positions: Vec<(usize, usize, NbtTag)> = Vec::new();
+        let mut widest = rows.iter().map(Vec::len).max().unwrap_or(0) * step;
+        for (x, z, name, states, data) in Self::block_entity_row(origin, entity_row) {
+            entries.push((name, states));
+            extra.push((x, z, entries.len() as i32 - 1));
+            widest = widest.max(x + step);
+            if let Some(data) = data {
+                positions.push((x, z, data));
+            }
+        }
+        let mut depth = entity_row + step;
+        for (x, z, name, states, data) in Self::phase_three_rows(origin, entity_row + step) {
+            entries.push((name, states));
+            extra.push((x, z, entries.len() as i32 - 1));
+            widest = widest.max(x + step);
+            depth = depth.max(z + step);
+            if let Some(data) = data {
+                positions.push((x, z, data));
+            }
+        }
+        let size = [widest, 1, depth];
+        let cell = |x: usize, _y: usize, z: usize| -> i32 {
+            if let Some((_, _, id)) = extra.iter().find(|(ex, ez, _)| *ex == x && *ez == z) {
+                return *id;
+            }
+            if !x.is_multiple_of(step) || !z.is_multiple_of(step) || z / step >= rows.len() {
+                return Self::NONE;
+            }
+            rows[z / step].get(x / step).copied().unwrap_or(Self::NONE)
+        };
+        let block_entities = NbtCompound::new(
+            positions
+                .into_iter()
+                .map(|(x, z, data)| {
+                    let key = Self::index(size, x, 0, z).to_string();
+                    let value = NbtCompound::new(vec![("block_entity_data".to_string(), data)]);
+                    (key, NbtTag::Compound(value))
+                })
+                .collect(),
+        );
+        Self::encode_with(size, origin, Self::palette_of(entries), block_entities, cell)
+    }
+
+    // The last row of the render check: block entities with real data, one per column from column 1 on. Each item is
+    // (x, z, block name, states, block entity data). A bed foot sits one cell before its head on z and a double chest
+    // takes two cells on x.
+    #[allow(clippy::type_complexity)]
+    fn block_entity_row(
+        origin: [i32; 3],
+        z: usize,
+    ) -> Vec<(usize, usize, &'static str, Vec<(&'static str, NbtTag)>, Option<NbtTag>)> {
+        let step = Self::TINT_GAP + 1;
+        let wx = |x: usize| origin[0] + x as i32;
+        let wz = |z: usize| origin[2] + z as i32;
+        let string = |text: &str| NbtTag::String(text.to_string());
+        let compound = |entries: Vec<(&str, NbtTag)>| {
+            NbtTag::Compound(NbtCompound::new(entries.into_iter().map(|(name, tag)| (name.to_string(), tag)).collect()))
+        };
+        let data = |id: &str, x: usize, z: usize, extra: Vec<(&str, NbtTag)>| -> Option<NbtTag> {
+            let mut entries = vec![
+                ("id", string(id)),
+                ("isMovable", NbtTag::Byte(1)),
+                ("x", NbtTag::Int(wx(x))),
+                ("y", NbtTag::Int(origin[1])),
+                ("z", NbtTag::Int(wz(z))),
+            ];
+            entries.extend(extra);
+            Some(compound(entries))
+        };
+        let item = |name: &str| {
+            compound(vec![
+                ("Count", NbtTag::Byte(1)),
+                ("Damage", NbtTag::Short(0)),
+                ("Name", string(name)),
+                ("WasPickedUp", NbtTag::Byte(0)),
+            ])
+        };
+        let side = |text: &str| {
+            compound(vec![
+                ("HideGlowOutline", NbtTag::Byte(0)),
+                ("IgnoreLighting", NbtTag::Byte(0)),
+                ("PersistFormatting", NbtTag::Byte(1)),
+                ("SignTextColor", NbtTag::Int(-16_777_216)),
+                ("Text", string(text)),
+                ("TextOwner", string("")),
+            ])
+        };
+        let north = || vec![("minecraft:cardinal_direction", string("north"))];
+        let empty = || NbtTag::List(Vec::new());
+        let mut row = Vec::new();
+        let mut column = 1;
+        let mut at = |count: usize| {
+            let x = column * step;
+            column += count;
+            x
+        };
+
+        let x = at(1);
+        let patterns = vec![
+            compound(vec![("Color", NbtTag::Int(4)), ("Pattern", string("mr"))]),
+            compound(vec![("Color", NbtTag::Int(11)), ("Pattern", string("bs"))]),
+        ];
+        row.push((
+            x,
+            z,
+            "minecraft:standing_banner",
+            vec![("ground_sign_direction", NbtTag::Int(0))],
+            data(
+                "Banner",
+                x,
+                z,
+                vec![("Base", NbtTag::Int(1)), ("Type", NbtTag::Int(0)), ("Patterns", NbtTag::List(patterns))],
+            ),
+        ));
+
+        let x = at(1);
+        for (cell_z, head) in [(z - 1, 0), (z, 1)] {
+            row.push((
+                x,
+                cell_z,
+                "minecraft:bed",
+                vec![
+                    ("direction", NbtTag::Int(0)),
+                    ("head_piece_bit", NbtTag::Byte(head)),
+                    ("occupied_bit", NbtTag::Byte(0)),
+                ],
+                data("Bed", x, cell_z, vec![("color", NbtTag::Byte(14))]),
+            ));
+        }
+
+        let x = at(1);
+        row.push((
+            x,
+            z,
+            "minecraft:standing_sign",
+            vec![("ground_sign_direction", NbtTag::Int(0))],
+            data(
+                "Sign",
+                x,
+                z,
+                vec![("FrontText", side("Stratum\nghost sign")), ("BackText", side("")), ("IsWaxed", NbtTag::Byte(0))],
+            ),
+        ));
+
+        for facing in [0, 2] {
+            let x = at(1);
+            row.push((
+                x,
+                z,
+                "minecraft:undyed_shulker_box",
+                vec![],
+                data("ShulkerBox", x, z, vec![("facing", NbtTag::Byte(facing)), ("Items", empty())]),
+            ));
+        }
+
+        let x = at(1);
+        let sherds = ["angler", "archer", "arms_up", "blade"]
+            .iter()
+            .map(|name| string(&format!("minecraft:{name}_pottery_sherd")))
+            .collect();
+        row.push((
+            x,
+            z,
+            "minecraft:decorated_pot",
+            vec![("direction", NbtTag::Int(0))],
+            data("DecoratedPot", x, z, vec![("sherds", NbtTag::List(sherds))]),
+        ));
+
+        let x = at(2);
+        for (cell_x, lead, other) in [(x, 1, x + 1), (x + 1, 0, x)] {
+            row.push((
+                cell_x,
+                z,
+                "minecraft:chest",
+                north(),
+                data(
+                    "Chest",
+                    cell_x,
+                    z,
+                    vec![
+                        ("Findable", NbtTag::Byte(0)),
+                        ("Items", empty()),
+                        ("pairlead", NbtTag::Byte(lead)),
+                        ("pairx", NbtTag::Int(wx(other))),
+                        ("pairz", NbtTag::Int(wz(z))),
+                    ],
+                ),
+            ));
+        }
+
+        let x = at(1);
+        row.push((
+            x,
+            z,
+            "minecraft:lectern",
+            vec![("minecraft:cardinal_direction", string("north")), ("powered_bit", NbtTag::Byte(0))],
+            data(
+                "Lectern",
+                x,
+                z,
+                vec![
+                    ("book", item("minecraft:writable_book")),
+                    ("hasBook", NbtTag::Byte(1)),
+                    ("page", NbtTag::Int(0)),
+                    ("totalPages", NbtTag::Int(1)),
+                ],
+            ),
+        ));
+
+        let x = at(1);
+        row.push((
+            x,
+            z,
+            "minecraft:campfire",
+            vec![("minecraft:cardinal_direction", string("north")), ("extinguished", NbtTag::Byte(0))],
+            data("Campfire", x, z, vec![("Item1", item("minecraft:beef")), ("ItemTime1", NbtTag::Int(0))]),
+        ));
+
+        let x = at(1);
+        row.push((x, z, "minecraft:trapped_chest", north(), data("Chest", x, z, vec![("Items", empty())])));
+
+        let x = at(1);
+        row.push((x, z, "minecraft:ender_chest", north(), data("EnderChest", x, z, vec![])));
+
+        let x = at(1);
+        let conduit = vec![("Active", NbtTag::Byte(1)), ("Target", NbtTag::Long(-1))];
+        row.push((x, z, "minecraft:conduit", vec![], data("Conduit", x, z, conduit)));
+
+        let x = at(1);
+        let bell_states =
+            vec![("attachment", string("standing")), ("direction", NbtTag::Int(0)), ("toggle_bit", NbtTag::Byte(0))];
+        let bell = vec![("Direction", NbtTag::Int(0)), ("Ringing", NbtTag::Byte(0)), ("Ticks", NbtTag::Int(0))];
+        row.push((x, z, "minecraft:bell", bell_states, data("Bell", x, z, bell)));
+
+        let x = at(1);
+        let table = data("EnchantTable", x, z, vec![("rott", NbtTag::Float(0.0))]);
+        row.push((x, z, "minecraft:enchanting_table", vec![], table));
+
+        let x = at(1);
+        row.push((x, z, "minecraft:copper_golem_statue", vec![], data("CopperGolemStatue", x, z, vec![])));
+        row
+    }
+
+    // Rows after the block entity row, from `z` on: double chests along x (row 0), double chests along z (row 1, two
+    // cells deep), standing skulls (row 2), then wall skulls, a chain and water (row 3). Chests: chest, trapped
+    // chest and copper chest in the four facings; both halves name each other in world coordinates.
+    #[allow(clippy::type_complexity)]
+    fn phase_three_rows(
+        origin: [i32; 3],
+        z: usize,
+    ) -> Vec<(usize, usize, &'static str, Vec<(&'static str, NbtTag)>, Option<NbtTag>)> {
+        let step = Self::TINT_GAP + 1;
+        let compound = |entries: Vec<(&str, NbtTag)>| {
+            NbtTag::Compound(NbtCompound::new(entries.into_iter().map(|(name, tag)| (name.to_string(), tag)).collect()))
+        };
+        let data = |id: &str, x: usize, z: usize, extra: Vec<(&str, NbtTag)>| -> Option<NbtTag> {
+            let mut entries = vec![
+                ("id", NbtTag::String(id.to_string())),
+                ("isMovable", NbtTag::Byte(1)),
+                ("x", NbtTag::Int(origin[0] + x as i32)),
+                ("y", NbtTag::Int(origin[1])),
+                ("z", NbtTag::Int(origin[2] + z as i32)),
+            ];
+            entries.extend(extra);
+            Some(compound(entries))
+        };
+        let mut row = Vec::new();
+        let chests = ["minecraft:chest", "minecraft:trapped_chest", "minecraft:copper_chest"];
+        let facings = ["north", "south", "east", "west"];
+        for (axis_row, along_z) in [(0, false), (1, true)] {
+            let cell_z = z + axis_row * step;
+            let mut column = 1;
+            for name in chests {
+                for facing in facings {
+                    let x = column * step;
+                    column += 1;
+                    for half in 0..2usize {
+                        let (hx, hz) = if along_z { (x, cell_z + half) } else { (x + half, cell_z) };
+                        let (ox, oz) = if along_z { (x, cell_z + 1 - half) } else { (x + 1 - half, cell_z) };
+                        row.push((
+                            hx,
+                            hz,
+                            name,
+                            vec![("minecraft:cardinal_direction", NbtTag::String(facing.to_string()))],
+                            data(
+                                "Chest",
+                                hx,
+                                hz,
+                                vec![
+                                    ("Findable", NbtTag::Byte(0)),
+                                    ("Items", NbtTag::List(Vec::new())),
+                                    ("pairlead", NbtTag::Byte(i8::from(half == 0))),
+                                    ("pairx", NbtTag::Int(origin[0] + ox as i32)),
+                                    ("pairz", NbtTag::Int(origin[2] + oz as i32)),
+                                ],
+                            ),
+                        ));
+                    }
+                }
+            }
+        }
+
+        let skulls = [
+            "minecraft:skeleton_skull",
+            "minecraft:wither_skeleton_skull",
+            "minecraft:zombie_head",
+            "minecraft:player_head",
+            "minecraft:creeper_head",
+            "minecraft:dragon_head",
+            "minecraft:piglin_head",
+        ];
+        let stand_z = z + 2 * step + 1;
+        let wall_z = stand_z + step;
+        let mut column = 1;
+        for (kind, name) in skulls.into_iter().enumerate() {
+            for turn in 0..4i8 {
+                let x = column * step;
+                column += 1;
+                let rotation = if kind % 2 == 0 {
+                    ("Rotation", NbtTag::Float(f32::from(turn) * 90.0))
+                } else {
+                    ("Rot", NbtTag::Byte(turn * 4))
+                };
+                row.push((
+                    x,
+                    stand_z,
+                    name,
+                    vec![("facing_direction", NbtTag::Int(1))],
+                    data("Skull", x, stand_z, vec![("SkullType", NbtTag::Byte(kind as i8)), rotation]),
+                ));
+            }
+        }
+        for (kind, name) in skulls.into_iter().enumerate() {
+            let x = (kind + 1) * step;
+            row.push((
+                x,
+                wall_z,
+                name,
+                vec![("facing_direction", NbtTag::Int(2 + (kind % 4) as i32))],
+                data("Skull", x, wall_z, vec![("SkullType", NbtTag::Byte(kind as i8))]),
+            ));
+        }
+        row.push(((skulls.len() + 2) * step, wall_z, "minecraft:chain", vec![], None));
+        for (offset, name) in [(4, "minecraft:water"), (5, "minecraft:water"), (6, "minecraft:lava")] {
+            row.push(((skulls.len() + offset) * step, wall_z, name, vec![], None));
+        }
+        row
+    }
+
+    // Every sample with the file name it is written under: `large.mcstructure`, `standard.mcstructure`,
+    // `tint.mcstructure`, `render-check.mcstructure`, `piece-<px>-<pz>.mcstructure`, then
+    // `target-piece-<i>.mcstructure`.
     pub fn files() -> Result<Vec<(String, Vec<u8>)>, NbtWriteError> {
         let mut files = vec![
             ("large.mcstructure".to_string(), Self::large()?),
             ("standard.mcstructure".to_string(), Self::standard()?),
             ("tint.mcstructure".to_string(), Self::tint()?),
+            ("render-check.mcstructure".to_string(), Self::render_check()?),
         ];
         for (index, bytes) in Self::pieces()?.into_iter().enumerate() {
             files.push((format!("piece-{}-{}.mcstructure", index / 2, index % 2), bytes));
@@ -247,13 +709,14 @@ impl SampleBuilder {
         origin: [i32; 3],
         cell: impl Fn(usize, usize, usize) -> i32,
     ) -> Result<Vec<u8>, NbtWriteError> {
-        Self::encode_with(size, origin, Self::palette(), cell)
+        Self::encode_with(size, origin, Self::palette(), NbtCompound::default(), cell)
     }
 
     fn encode_with(
         size: [usize; 3],
         origin: [i32; 3],
         palette: NbtTag,
+        positions: NbtCompound,
         cell: impl Fn(usize, usize, usize) -> i32,
     ) -> Result<Vec<u8>, NbtWriteError> {
         let mut primary = Vec::with_capacity(size[0] * size[1] * size[2]);
@@ -267,7 +730,7 @@ impl SampleBuilder {
         let secondary = vec![Self::NONE; primary.len()];
         let default = NbtCompound::new(vec![
             ("block_palette".to_string(), palette),
-            ("block_position_data".to_string(), NbtTag::Compound(NbtCompound::default())),
+            ("block_position_data".to_string(), NbtTag::Compound(positions)),
         ]);
         let palette = NbtCompound::new(vec![("default".to_string(), NbtTag::Compound(default))]);
         let structure = NbtCompound::new(vec![

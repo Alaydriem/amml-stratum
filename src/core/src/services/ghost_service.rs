@@ -446,6 +446,7 @@ impl GhostService {
         self.scheduler.plan(Some(build), &self.wanted, &self.miniature_groups, self.shift, frame);
         if std::mem::take(&mut self.resend) && frame.palette.is_none() {
             frame.palette = Some(Arc::new(build.palette.clone()));
+            frame.block_entities = Some(build.shared_block_entities());
         }
         if frame.cut {
             self.cut = true;
@@ -680,11 +681,13 @@ impl GhostService {
         }
         let kept = self.turned.take().filter(|done| rotation != Rotation::R0 && done.turns(&sources, rotation));
         let turned = kept.as_ref().map(|done| done.turned.as_slice()).unwrap_or(&sources);
-        let reuse = self.build.as_ref().filter(|_| self.same_structures(&placed));
+        let same_structures = self.same_structures(&placed);
+        let reuse = self.build.as_ref().filter(|_| same_structures);
         match GhostAssembler::build(&placed, turned, marker.origin, rotation, self.revision + 1, reuse) {
             Ok(build) => {
                 let same_palette = self.build.as_ref().is_some_and(|current| current.palette == build.palette);
                 if same_palette {
+                    self.resend |= !same_structures;
                     self.replace(build, rotation);
                 } else {
                     self.install(build, rotation);

@@ -4,8 +4,9 @@ use alaydriem_stratum::game::TessellatorLayout;
 use stratum_core::structs::ghost::{GhostDraw, GhostJob, GhostJobMode};
 
 use crate::support::fake_ghost::{
-    BEGIN_CALLS, BT_EVENTS, CLEAR_CALLS, CLEAR_KEEPS_BEGIN, CLEARS_CLOSED, END_CALLS, MESH_DTOR_CALLS, MESH_LIVE,
-    NBT_STATE, RENDERED, TESSELLATE_CALLS, TESSELLATE_FAIL_AT,
+    BEGIN_CALLS, BT_EVENTS, CLEAR_CALLS, CLEAR_KEEPS_BEGIN, CLEARS_CLOSED, END_CALLS, EXTRA_LAYER_MASK, EXTRA_LAYERS,
+    MESH_DTOR_CALLS, MESH_LIVE, NBT_STATE, RENDER_LAYER, RENDERED, TESSELLATE_CALLS, TESSELLATE_FAIL_AT,
+    TESSELLATED_LAYERS,
 };
 use crate::support::{FakeGhost, GhostRig};
 
@@ -41,6 +42,22 @@ fn a_normal_build_pairs_every_begin_with_an_end_and_keeps_the_mesh() {
     assert_eq!(built.len(), 1);
     assert!(built[0].ok);
     assert_eq!(built[0].bytes, 4 * 20, "one quad at the measured 20 GPU bytes per vertex");
+}
+
+#[test]
+fn a_two_pass_cell_tessellates_twice_with_each_layer() {
+    EXTRA_LAYER_MASK.store(EXTRA_LAYERS, Ordering::SeqCst);
+
+    let rig = rig_with(vec![GhostRig::job(0, 1, 0, [0, 64, 0])], Vec::new());
+
+    // call 1 is the winding probe at the join; the job's one cell is tessellated on its main layer, then on Opaque
+    let layers = TESSELLATED_LAYERS.lock().unwrap().clone();
+    assert_eq!(layers[1..], [i32::from(RENDER_LAYER), 5]);
+    let reports = rig.reports();
+    let built: Vec<_> = reports.iter().flat_map(|report| report.built.iter()).collect();
+    assert!(built[0].ok);
+    assert_eq!(built[0].bytes, 2 * 4 * 20, "one quad per pass");
+    assert_paired(&rig);
 }
 
 #[test]

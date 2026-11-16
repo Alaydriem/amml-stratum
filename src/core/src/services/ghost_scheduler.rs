@@ -165,6 +165,7 @@ impl GhostScheduler {
         frame.clear_all = false;
         frame.cut = false;
         frame.palette = None;
+        frame.block_entities = None;
         frame.slot_capacity = self.capacity;
         frame.generation = self.generation.unwrap_or(0);
     }
@@ -278,6 +279,7 @@ impl GhostScheduler {
         frame.clear_all = false;
         frame.cut = false;
         frame.palette = None;
+        frame.block_entities = None;
         frame.slot_capacity = self.capacity;
 
         let revision = build.map(|build| build.revision);
@@ -286,6 +288,7 @@ impl GhostScheduler {
             self.generation = revision;
             frame.clear_all = true;
             frame.palette = build.map(|build| Arc::new(build.palette.clone()));
+            frame.block_entities = build.map(|build| build.shared_block_entities());
         }
         frame.generation = revision.unwrap_or(0);
         let Some(build) = build else {

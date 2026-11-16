@@ -7,7 +7,7 @@ use stratum_core::structs::ghost::GhostJob;
 use crate::game::{
     BlockCalls, GameBlockTessellator, GameVec, MeshDataLayout, OpenBuild, OwnedMesh, OwnedMeshData, Tessellator,
 };
-use crate::ghost::{BlockResolver, GhostGroupBuffer};
+use crate::ghost::{BlockResolver, GhostGroupBuffer, QuadMirror};
 use crate::types::{GhostBuilt, GhostCalls, GroupFinished, PrimitiveMode};
 
 /// Builds one ghost job into an `mce::Mesh`, or into the mini ghost group buffer, with the game's `BlockTessellator`.
@@ -30,6 +30,11 @@ pub struct GhostTessellator {
     winding: f32,
     // the block type of this world's full grass block, which takes the biome tint on its top face only
     grass_type: *const c_void,
+    // the padded cell indices the skip rule left out in the last build or append, in increasing order; bounded by the
+    // cells of one job, which fits one window
+    skipped: Vec<u32>,
+    // whether this world's first left-out reversed copy was logged
+    mirror_logged: bool,
 }
 
 impl GhostTessellator {
@@ -50,6 +55,8 @@ impl GhostTessellator {
     const PROBE: [i32; 3] = [3, 6, 9];
     /// A quad faces up when its outward normal is within 60 degrees of +y.
     const UP_COS: f32 = 0.5;
+    /// `TintMethod::Water`.
+    const WATER_TINT: u8 = 6;
 
     pub fn new(calls: &GhostCalls) -> Self {
         Self {
@@ -62,6 +69,8 @@ impl GhostTessellator {
             offset: 0,
             winding: 1.0,
             grass_type: std::ptr::null(),
+            skipped: Vec::new(),
+            mirror_logged: false,
         }
     }
 
@@ -107,6 +116,7 @@ impl GhostTessellator {
     /// the old region, which may be freed by now, and is pointed at the next one by the next join.
     pub fn leave(&mut self) {
         self.grass_type = std::ptr::null();
+        self.mirror_logged = false;
         self.region = std::ptr::null_mut();
         self.perm = None;
         self.offset = 0;
@@ -115,6 +125,12 @@ impl GhostTessellator {
 
     pub fn ready(&self) -> bool {
         self.blocks.is_some() && self.perm.is_some()
+    }
+
+    /// The padded cell indices of the last `build` or `append` whose world block already had the ghost block's name,
+    /// so the skip rule left them out; in increasing order. Empty when that call built nothing.
+    pub fn skipped(&self) -> &[u32] {
+        &self.skipped
     }
 
     /// Tessellates every drawn cell of `job` into `out`, positions relative to the job's origin, each quad pushed
@@ -134,6 +150,7 @@ impl GhostTessellator {
             built.busy = true;
             return built;
         }
+        self.skipped.clear();
         *out = None;
         if !self.ready() || !Self::fits(job) {
             return built;
@@ -170,6 +187,7 @@ impl GhostTessellator {
             built.busy = true;
             return built;
         }
+        self.skipped.clear();
         if !self.ready() || !Self::fits(job) {
             return built;
         }
@@ -251,13 +269,19 @@ impl GhostTessellator {
         sides_fit && job.cells.len() == ((sx + 2) * (sy + 2) * (sz + 2)) as usize
     }
 
-    // fills the window for the job and gives the vertex count to reserve: 24 per cell with a block
+    // fills the window for the job and gives the vertex count to reserve: 24 per layer pass of each cell with a block,
+    // twice that for a double-sided block
     fn prepare(&mut self, job: &GhostJob, blocks: &BlockResolver) -> i32 {
         let origin = BlockPos { x: job.origin[0], y: job.origin[1], z: job.origin[2] };
         let [sx, sy, sz] = job.dims.map(|side| side as i32);
         self.fill_window(Some(job), blocks, origin, [sx, sy, sz]);
-        let cells = job.cells.iter().filter(|id| !blocks.block(**id).is_null()).count();
-        i32::try_from(cells * Self::VERTS_PER_CELL).unwrap_or(i32::MAX)
+        let passes: usize = job
+            .cells
+            .iter()
+            .filter(|id| !blocks.block(**id).is_null())
+            .map(|id| blocks.passes(*id).count() * if blocks.double_sided(*id) { 2 } else { 1 })
+            .sum();
+        i32::try_from(passes * Self::VERTS_PER_CELL).unwrap_or(i32::MAX)
     }
 
     // tessellates every drawn cell of `job` into the game's tessellator inside the open begin, in world positions
@@ -274,13 +298,17 @@ impl GhostTessellator {
         let winding = self.winding;
         let grass_type = self.grass_type;
         let game = self.game;
+        let heap = self.heap;
+        let skipped = &mut self.skipped;
+        let mirror_logged = &mut self.mirror_logged;
         let Some(block_tessellator) = self.blocks.as_mut() else { return };
         let [sx, sy, sz] = job.dims.map(|side| side as usize);
         let (px, pz) = (sx + 2, sz + 2);
         for y in 0..sy {
             for z in 0..sz {
                 for x in 0..sx {
-                    let id = job.cells[((y + 1) * pz + (z + 1)) * px + (x + 1)];
+                    let cell = ((y + 1) * pz + (z + 1)) * px + (x + 1);
+                    let id = job.cells[cell];
                     let block = blocks.block(id);
                     if block.is_null() || block == blocks.air() {
                         continue;
@@ -298,18 +326,37 @@ impl GhostTessellator {
                         // SAFETY: the block the region holds and a block of the same world
                         if unsafe { game.block_type(world) == game.block_type(block) } {
                             built.skipped += 1;
+                            skipped.push(cell as u32);
                             continue;
                         }
                     }
                     built.cells += 1;
-                    block_tessellator.set_rendering_layer(blocks.layer(id));
-                    let first = tessellator.vertex_count();
-                    // SAFETY: a block of the joined world and the live region it belongs to
-                    unsafe { block_tessellator.tessellate(tessellator, block, pos) };
-                    let data = tessellator.mesh_data();
-                    // SAFETY: as above
-                    unsafe { Self::tint(&game, data, first, block, region, pos, grass_type, winding) };
-                    Self::post(data, first, alpha, winding);
+                    let double_sided = blocks.double_sided(id);
+                    // one pass per layer the chunk builder would queue the block in; a shape that checks the layer
+                    // draws only on its own
+                    for layer in blocks.passes(id).layers() {
+                        block_tessellator.set_rendering_layer(layer);
+                        let first = tessellator.vertex_count();
+                        // SAFETY: a block of the joined world and the live region it belongs to
+                        unsafe { block_tessellator.tessellate(tessellator, block, pos) };
+                        let data = tessellator.mesh_data();
+                        // SAFETY: as above
+                        unsafe { Self::tint(&game, data, first, block, region, pos, grass_type, winding) };
+                        Self::post(data, first, alpha, winding);
+                        if double_sided {
+                            // SAFETY: the game's mesh data, whose vectors the game filled from its own heap
+                            match unsafe { QuadMirror::append(&heap, data, first) } {
+                                Some(added) => tessellator.add_count(added as u32),
+                                None => {
+                                    built.unmirrored += 1;
+                                    if !*mirror_logged {
+                                        *mirror_logged = true;
+                                        curia::warn!("double-sided block left one-sided, mesh vectors do not fit", {});
+                                    }
+                                }
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -475,9 +522,21 @@ impl GhostTessellator {
         if top && !(last - first).is_multiple_of(Self::QUAD) {
             return;
         }
-        // SAFETY: forwarded to the caller
-        let Some(colour) = (unsafe { game.tint_colour(method, block, region, pos) }) else { return };
+        // water takes the colour of the biome at its position; the game's water policy reads a column cache that is
+        // empty on the client. Every other method asks the game's policy
+        let colour = if method == Self::WATER_TINT {
+            // SAFETY: forwarded to the caller
+            unsafe { game.water_colour(region, pos) }
+        } else {
+            // SAFETY: forwarded to the caller
+            unsafe { game.tint_colour(method, block, region, pos) }
+        };
+        let Some(colour) = colour else { return };
         let multiply = [colour[0], colour[1], colour[2]].map(|channel| channel.clamp(0.0, 1.0));
+        // a colour with no red, green or blue would turn the block black; it stays as the tessellator left it
+        if multiply == [0.0; 3] {
+            return;
+        }
         let positions = &data.positions.as_slice()[first..];
         let colors = &mut GameVec::as_mut_slice(&mut data.colors)[first..];
         for (quad, colors) in colors.chunks_mut(Self::QUAD).enumerate() {

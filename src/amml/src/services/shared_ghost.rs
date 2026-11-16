@@ -25,6 +25,8 @@ pub struct SharedGhost {
     merged_reports: AtomicU64,
     // A report said the renderer reset its world. Sticky, so the reset reaches core even when its report is dropped.
     world_reset: AtomicBool,
+    // The world epoch of the last publish, read by the render thread without a lock.
+    world_epoch: AtomicU64,
 }
 
 impl SharedGhost {
@@ -39,6 +41,7 @@ impl SharedGhost {
             dropped_entries: AtomicU64::new(0),
             merged_reports: AtomicU64::new(0),
             world_reset: AtomicBool::new(false),
+            world_epoch: AtomicU64::new(0),
         }
     }
 
@@ -59,6 +62,12 @@ impl SharedGhost {
         };
         outbox.publish(frame);
         self.slot_capacity.store(frame.slot_capacity, Ordering::Relaxed);
+        self.world_epoch.store(frame.world_epoch, Ordering::SeqCst);
+    }
+
+    // Any thread: the world epoch of the last publish, with no take and no lock.
+    pub fn published_world_epoch(&self) -> u64 {
+        self.world_epoch.load(Ordering::SeqCst)
     }
 
     // Render thread: the frame to apply now. When nothing was published since the last take, or the tick holds

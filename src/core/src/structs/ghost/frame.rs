@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use super::{GhostDraw, GhostJob, GhostPalette};
+use super::{GhostBlockEntityTable, GhostDraw, GhostJob, GhostPalette};
 use crate::structs::marker::Rotation;
 
 // Everything the shim needs to render one frame of the ghost. Core refills one value in place.
@@ -25,6 +25,8 @@ pub struct GhostFrame {
     pub frees: Vec<u32>,
     // Set only in the frame where the generation changed.
     pub palette: Option<Arc<GhostPalette>>,
+    // The block entity NBT of the build, set in the same frames as `palette`.
+    pub block_entities: Option<Arc<GhostBlockEntityTable>>,
     pub opacity: f32,
     // The turn of the build the jobs belong to. The shim turns each block state by it.
     pub rotation: Rotation,
@@ -44,6 +46,7 @@ impl GhostFrame {
             jobs: Vec::new(),
             frees: Vec::new(),
             palette: None,
+            block_entities: None,
             opacity: 1.0,
             rotation: Rotation::R0,
             cut: false,

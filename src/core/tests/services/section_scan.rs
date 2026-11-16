@@ -3,6 +3,7 @@ use std::time::Instant;
 
 use stratum_core::services::{GhostSections, SectionScan};
 use stratum_core::structs::ghost::{GhostBuild, GhostPalette, GhostPiece};
+use stratum_core::structs::marker::Rotation;
 use stratum_core::structs::structure::{BlockLayer, SparseLayer, Structure, StructureSize};
 
 use crate::support::{BlockFactory, GhostFixture};
@@ -22,17 +23,18 @@ impl Pieces {
         }
         let mut palette = GhostPalette { entries: vec![BlockFactory::plain("stone")] };
         let marker_block = palette.marker_id().unwrap();
-        GhostBuild {
-            pieces: origins
+        GhostBuild::new(
+            origins
                 .iter()
                 .map(|origin| GhostPiece { structure: structure.clone(), world_min: *origin, remap: vec![0] })
                 .collect(),
             palette,
             marker_block,
-            world_min: min,
-            world_max: max,
-            revision: 1,
-        }
+            min,
+            max,
+            1,
+            Rotation::R0,
+        )
     }
 
     fn full(size: [u32; 3]) -> Arc<Structure> {
@@ -43,6 +45,7 @@ impl Pieces {
             palette: vec![BlockFactory::plain("stone")],
             primary: BlockLayer::new(vec![0; cells]),
             secondary: SparseLayer::default(),
+            block_entities: Default::default(),
         })
     }
 }

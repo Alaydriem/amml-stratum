@@ -1,4 +1,4 @@
-use super::{GhostJobMode, SectionKey};
+use super::{GhostBlockEntity, GhostJobMode, SectionKey};
 
 // One section mesh to build: the part's cells plus one cell of neighbours on every side.
 #[derive(Debug, Clone)]
@@ -27,6 +27,8 @@ pub struct GhostJob {
     pub group_offset: [i32; 3],
     // Size of the slot box in cells. Equal to `dims` for a Replace job.
     pub slot_size: [u32; 3],
+    // The cells drawn with the block actor renderer. Empty for a group job and the marker.
+    pub block_entities: Vec<GhostBlockEntity>,
 }
 
 impl GhostJob {
@@ -44,6 +46,7 @@ impl GhostJob {
             group_index: 0,
             group_offset: [0; 3],
             slot_size: [0; 3],
+            block_entities: Vec::new(),
         }
     }
 }

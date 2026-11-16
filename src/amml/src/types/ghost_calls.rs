@@ -61,12 +61,20 @@ pub struct GhostCalls {
     pub item_in_hand_renderer_slot: u64,
     /// Offset of `mMatBlendBlock` in `ItemInHandRenderer`.
     pub blend_material: u64,
-    /// Offset of `mRenderLayer` (one byte) in `BlockGraphics`.
-    pub render_layer: u64,
+    /// Address of `Block::getRenderLayer() const`, the static main render layer of a block.
+    pub block_get_render_layer: usize,
+    /// Vtable slot of `BlockType::getExtraRenderLayers() const`.
+    pub extra_render_layers_slot: u64,
     /// Vtable slot of `TessellationPolicy::get(Block const&, BlockSource&, BlockPos const&, BiomeTintCache const*)`.
     pub tessellation_policy_get_slot: u64,
     /// Offset of `mTintMethod` (one byte) in `BlockType`.
     pub tint_method: u64,
+    /// Vtable slot of `BlockSource::getChunk(int x, int z) const`; 0 with the water tint off.
+    pub get_chunk_slot: u64,
+    /// Address of `LevelChunk::getBiome(ChunkBlockPos const&) const`; 0 with the water tint off.
+    pub level_chunk_get_biome: usize,
+    /// Address of `BiomeColorSampling::getWaterColor(Biome const&, BlockPos const&)`; 0 with the water tint off.
+    pub biome_get_water_color: usize,
     pub heap_new: HeapNewFn,
     pub heap_delete: HeapDeleteFn,
 }
@@ -99,6 +107,11 @@ impl GhostCalls {
         }
         anchor(EntryId::CAMERA_FORWARD, CameraLayout::FORWARD)?;
         let instance = get(StratumEntry::BLOCK_TYPE_REGISTRY_INSTANCE)?;
+        // the three water calls come together: with any one missing the water tint is off and all three are 0
+        let water = match StratumEntry::WATER_TINT.map(|id| entries.get(id)) {
+            [Some(slot), Some(biome), Some(colour)] => [slot, biome, colour],
+            _ => [0; 3],
+        };
         Ok(Self {
             tessellator_begin: address(StratumEntry::TESSELLATOR_BEGIN)?,
             tessellator_end: address(StratumEntry::TESSELLATOR_END)?,
@@ -137,9 +150,13 @@ impl GhostCalls {
             frame_views: get(StratumEntry::FRAME_RENDER_OBJECT_VIEWS)?,
             item_in_hand_renderer_slot: get(StratumEntry::CLIENT_INSTANCE_GET_ITEM_IN_HAND_RENDERER)?,
             blend_material: get(StratumEntry::ITEM_IN_HAND_RENDERER_MAT_BLEND_BLOCK)?,
-            render_layer: get(StratumEntry::BLOCK_GRAPHICS_RENDER_LAYER)?,
+            block_get_render_layer: address(StratumEntry::BLOCK_GET_RENDER_LAYER)?,
+            extra_render_layers_slot: get(StratumEntry::BLOCK_TYPE_GET_EXTRA_RENDER_LAYERS)?,
             tessellation_policy_get_slot: get(StratumEntry::TESSELLATION_POLICY_GET)?,
             tint_method: get(StratumEntry::BLOCK_TYPE_TINT_METHOD)?,
+            get_chunk_slot: water[0],
+            level_chunk_get_biome: water[1] as usize,
+            biome_get_water_color: water[2] as usize,
             heap_new,
             heap_delete,
         })

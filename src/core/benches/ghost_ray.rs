@@ -30,6 +30,7 @@ impl BenchRay {
                 .collect(),
             primary: BlockLayer::new(cells),
             secondary: SparseLayer::default(),
+            block_entities: Default::default(),
         });
         let placed = [PlacedStructure { structure: Arc::clone(&structure), origin: [0, 0, 0] }];
         GhostAssembler::build(&placed, &[structure], [0, 0, 0], Rotation::R0, 1, None).expect("builds")

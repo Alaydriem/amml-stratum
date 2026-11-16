@@ -1,5 +1,5 @@
 use stratum_core::errors::GhostError;
-use stratum_core::services::{GhostAssembler, NbtReader};
+use stratum_core::services::{BlockEntityTurner, GhostAssembler, NbtReader, NbtWriter};
 use stratum_core::structs::ghost::{GhostBuild, GhostPalette, GhostPiece};
 use stratum_core::structs::layout::LayoutIssue;
 use stratum_core::structs::library::{ProjectId, ProjectKind, StructureId};
@@ -250,16 +250,19 @@ fn first_piece_holding_a_cell_decides_even_when_its_cell_is_empty() {
     let mut palette =
         GhostPalette { entries: vec![BlockState::new("minecraft:stone".to_string(), BlockStates::default())] };
     let marker_block = palette.marker_id().unwrap();
-    let build = |first: &std::sync::Arc<Structure>, second: &std::sync::Arc<Structure>| GhostBuild {
-        pieces: vec![
-            GhostPiece { structure: first.clone(), world_min: [0, 0, 0], remap: vec![GhostPalette::NONE] },
-            GhostPiece { structure: second.clone(), world_min: [0, 0, 0], remap: vec![0] },
-        ],
-        palette: palette.clone(),
-        marker_block,
-        world_min: [0, 0, 0],
-        world_max: [1, 0, 0],
-        revision: 1,
+    let build = |first: &std::sync::Arc<Structure>, second: &std::sync::Arc<Structure>| {
+        GhostBuild::new(
+            vec![
+                GhostPiece { structure: first.clone(), world_min: [0, 0, 0], remap: vec![GhostPalette::NONE] },
+                GhostPiece { structure: second.clone(), world_min: [0, 0, 0], remap: vec![0] },
+            ],
+            palette.clone(),
+            marker_block,
+            [0, 0, 0],
+            [1, 0, 0],
+            1,
+            Rotation::R0,
+        )
     };
 
     let covered = build(&empty, &stone);
@@ -350,6 +353,28 @@ fn assembled_build_has_a_marker_block() {
 }
 
 #[test]
+fn a_build_of_the_same_structures_and_turn_shares_the_block_entity_table() {
+    let structure = GhostFixture::structure([2, 1, 1], &["stone", "chest"]);
+    let marker = GhostFixture::marker([0, 64, 0], MarkerTarget::Structure(StructureId(1)));
+    let loaded = GhostFixture::loaded(&[(1, structure)]);
+    let library = GhostFixture::library(ProjectKind::Normal, &[]);
+    let first = GhostAssembler::assemble(&marker, &library, &loaded, 1).unwrap();
+    let placed = GhostAssembler::placed(&marker, &library, &loaded).unwrap();
+    let same: Vec<_> = placed.iter().map(|piece| piece.structure.clone()).collect();
+
+    let moved = GhostAssembler::build(&placed, &same, [1, 64, 0], Rotation::R0, 2, Some(&first)).unwrap();
+    assert!(std::sync::Arc::ptr_eq(&moved.shared_block_entities(), &first.shared_block_entities()));
+
+    let turned: Vec<_> =
+        placed.iter().map(|piece| std::sync::Arc::new(GhostAssembler::turn(&piece.structure, Rotation::R90))).collect();
+    let after_turn = GhostAssembler::build(&placed, &turned, marker.origin, Rotation::R90, 3, Some(&first)).unwrap();
+    assert!(!std::sync::Arc::ptr_eq(&after_turn.shared_block_entities(), &first.shared_block_entities()));
+
+    let fresh = GhostAssembler::build(&placed, &same, marker.origin, Rotation::R0, 4, None).unwrap();
+    assert!(!std::sync::Arc::ptr_eq(&fresh.shared_block_entities(), &first.shared_block_entities()));
+}
+
+#[test]
 fn reused_palette_keeps_one_marker_entry() {
     let structure = GhostFixture::structure([2, 1, 1], &["stone", "oak_stairs"]);
     let marker = GhostFixture::marker([0, 64, 0], MarkerTarget::Structure(StructureId(1)));
@@ -364,4 +389,62 @@ fn reused_palette_keeps_one_marker_entry() {
     assert_eq!(second.marker_block, first.marker_block);
     let markers = second.palette.entries.iter().filter(|entry| **entry == GhostPalette::marker_entry()).count();
     assert_eq!(markers, 1);
+}
+
+#[test]
+fn a_turned_structure_keeps_each_block_entity_on_its_turned_cell() {
+    let mut structure = (*GhostFixture::structure([2, 1, 1], &["chest", "chest"])).clone();
+    let origin = Some([100, 64, 200]);
+    structure.world_origin = origin;
+    let chest = |pair_x: i32| {
+        NbtWriter::compound(
+            "",
+            &[("id", NbtTag::String("Chest".to_string())), ("pairx", NbtTag::Int(pair_x)), ("pairz", NbtTag::Int(200))],
+        )
+        .unwrap()
+    };
+    assert!(structure.block_entities.insert(0, chest(101)));
+    assert!(structure.block_entities.insert(1, chest(100)));
+    let structure = std::sync::Arc::new(structure);
+    let loaded = GhostFixture::loaded(&[(1, structure.clone())]);
+    let library = GhostFixture::library(ProjectKind::Normal, &[]);
+
+    // The pair of the chest at cell (0, 0, 0) is one cell east at R0, and the offset turns with the build.
+    for rotation in [Rotation::R0, Rotation::R90, Rotation::R180, Rotation::R270] {
+        let mut marker = GhostFixture::marker([0, 0, 0], MarkerTarget::Structure(StructureId(1)));
+        marker.rotation = rotation;
+        let build = GhostAssembler::assemble(&marker, &library, &loaded, 1).unwrap();
+        let turned = &build.pieces[0].structure;
+
+        assert_eq!(turned.world_origin, origin);
+        assert_eq!(turned.block_entities.len(), 2);
+        let expected = rotation.turn_offset([1, 0, 0]).map(|value| value as i32);
+        // The chest of source cell 0 sits at the turned local position of that cell.
+        let corner = rotation.turn_corner([2, 1, 1]);
+        let local = [0, 1, 2].map(|axis| (-corner[axis]) as i32);
+        let cell = turned.index_of(local[0] as u32, local[1] as u32, local[2] as u32) as u32;
+        let entry = turned.block_entities.entry_of(cell).unwrap();
+        let nbt = turned.block_entities.entry(entry).unwrap();
+        assert_eq!(BlockEntityTurner::chest_pair_offset(nbt, local, origin), Some(expected), "{rotation:?}");
+    }
+}
+
+#[test]
+fn equal_block_entities_stay_one_entry_after_the_turn() {
+    let mut structure = (*GhostFixture::structure([3, 1, 1], &["shulker_box", "shulker_box", "shulker_box"])).clone();
+    let shulker =
+        NbtWriter::compound("", &[("id", NbtTag::String("ShulkerBox".to_string())), ("facing", NbtTag::Byte(2))])
+            .unwrap();
+    for cell in 0..3 {
+        structure.block_entities.insert(cell, shulker.clone());
+    }
+
+    let turned = GhostAssembler::turn(&structure, Rotation::R90);
+
+    let entries: std::collections::HashSet<u32> = turned.block_entities.cells().map(|(_, entry)| entry).collect();
+    assert_eq!(turned.block_entities.len(), 3);
+    assert_eq!(entries.len(), 1);
+    let entry = turned.block_entities.entry(*entries.iter().next().unwrap()).unwrap();
+    let (_, root) = NbtReader::read(entry, NbtLimits::STRUCTURE).unwrap();
+    assert_eq!(root.get("facing"), Some(&NbtTag::Byte(5)));
 }

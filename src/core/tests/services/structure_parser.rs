@@ -1,6 +1,6 @@
 use stratum_core::errors::StructureError;
-use stratum_core::services::StructureParser;
-use stratum_core::structs::nbt::NbtTag;
+use stratum_core::services::{NbtReader, StructureParser};
+use stratum_core::structs::nbt::{NbtCompound, NbtLimits, NbtTag};
 use stratum_core::structs::structure::{BlockLayer, StateValue};
 
 use crate::support::{NbtWriter, StructureFixture};
@@ -487,4 +487,53 @@ fn a_parse_stops_when_asked_and_reads_the_whole_file_when_not() {
     // 64^3 cells give four checks per layer, so the third check comes inside the first layer
     assert_eq!(stopped, Err(StructureError::Stopped));
     assert!(StructureParser::parse_until(&bytes, || false).is_ok());
+}
+
+#[test]
+fn a_parsed_structure_maps_each_cell_to_its_block_entity_data() {
+    let banner = vec![
+        ("Base", NbtTag::Int(1)),
+        (
+            "Patterns",
+            NbtTag::List(vec![NbtTag::Compound(NbtCompound::new(vec![
+                ("Color".to_string(), NbtTag::Int(3)),
+                ("Pattern".to_string(), NbtTag::String("bri".to_string())),
+            ]))]),
+        ),
+    ];
+    let chest = vec![("pairx", NbtTag::Int(2)), ("pairz", NbtTag::Int(0))];
+    let bytes = StructureFixture::new([3, 2, 2])
+        .block(0, 0, 0, "minecraft:standing_banner")
+        .block(2, 1, 1, "minecraft:chest")
+        .block_entity(0, 0, 0, banner.clone())
+        .block_entity(2, 1, 1, chest.clone())
+        .bytes();
+    let structure = StructureParser::parse(&bytes).unwrap();
+
+    assert_eq!(structure.block_entities.len(), 2);
+    for (cell, data) in [(0usize, banner), (11, chest)] {
+        let entry = structure.block_entities.entry_of(cell as u32).unwrap();
+        let (_, compound) =
+            NbtReader::read(structure.block_entities.entry(entry).unwrap(), NbtLimits::STRUCTURE).unwrap();
+        assert_eq!(compound.len(), data.len());
+        for (name, tag) in data {
+            assert_eq!(compound.get(name), Some(&tag));
+        }
+    }
+    assert_eq!(structure.block_entities.entry_of(5), None);
+}
+
+#[test]
+fn a_key_outside_the_structure_is_skipped() {
+    let data = || vec![("id", NbtTag::String("Chest".to_string()))];
+    let bytes = StructureFixture::new([2, 2, 2])
+        .block_entity_key("8", data())
+        .block_entity_key("-1", data())
+        .block_entity_key("abc", data())
+        .block_entity_key("7", data())
+        .bytes();
+    let structure = StructureParser::parse(&bytes).unwrap();
+
+    assert_eq!(structure.block_entities.len(), 1);
+    assert!(structure.block_entities.entry_of(7).is_some());
 }

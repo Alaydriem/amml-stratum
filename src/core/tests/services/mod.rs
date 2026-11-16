@@ -1,4 +1,7 @@
 mod atomic_file;
+mod block_entity_names;
+mod block_entity_turner;
+mod chest_pairer;
 mod easy_place_service;
 mod ghost_assembler;
 mod ghost_ray;
@@ -21,6 +24,7 @@ mod nbt_reader;
 mod place_needs;
 mod preview;
 mod section_scan;
+mod skull_poser;
 mod store_writer;
 mod stratum_controller;
 mod structure_cache;

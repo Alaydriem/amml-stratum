@@ -1,22 +1,29 @@
 use std::ffi::c_void;
 use std::ptr::NonNull;
+use std::sync::Arc;
 use std::time::Instant;
 
-use amml_game::{ClientInstance, GameEntries, RawObject, RenderCamera};
-use stratum_core::structs::ghost::{GhostJob, GhostJobMode, SlotBuilt};
+use amml_game::{BlockPos, ClientInstance, GameEntries, RawObject, RenderCamera};
+use stratum_core::structs::ghost::{GhostBlockEntityTable, GhostJob, GhostJobMode, SlotBuilt};
 
 use crate::game::{OwnedMesh, ScreenContext, Tessellator, TexturePtrLayout, TextureVariant};
-use crate::ghost::{BlockResolver, GhostGroupBuffer, GhostTessellator};
+use crate::ghost::{
+    BlockActorCell, BlockActorDrawer, BlockActorKey, BlockResolver, GhostGroupBuffer, GhostTessellator, SkullSlot,
+};
 use crate::services::{GhostTake, SharedGhost};
-use crate::types::{GhostBuilt, GhostCalls, GhostWorld, GroupStep, PlayerSpot};
+use crate::types::{BlockActorCalls, GhostBuilt, GhostCalls, GhostWorld, GroupStep, PlayerSpot};
 
 /// The ghost on the render thread: each frame it takes the frame core published, frees and builds the mesh slots it
 /// lists, draws the listed slots that are in view see-through over the world, farthest first, and reports what it
 /// built and how many it left out of view. What to build and draw is core's; the renderer holds only the slot table
 /// and its per-slot scratch, sized once to core's slot capacity, and the palette's block lookups.
 ///
+/// The block-entity cells of each slot's job are kept with the slot and drawn by the block actor drawer in the game's
+/// block-entity pass, for the full-size slots that were in view in the last frame.
+///
 /// Bound: the slot table and every per-slot vector hold `slot_capacity` entries, which changes only with the config;
-/// the block lookups hold one entry per palette id.
+/// each slot's block-entity cells are at most the cells of one job, which fits one tessellator window; the block
+/// lookups hold one entry per palette id; the drawer's actor pool has its own bound.
 pub struct GhostRenderer {
     calls: GhostCalls,
     // the world the slots, the blocks and the tessellator belong to; null outside a world
@@ -48,6 +55,14 @@ pub struct GhostRenderer {
     build_us: u64,
     cells_built: u32,
     skipped_cells: u32,
+    drawer: BlockActorDrawer,
+    // the block entity NBT of the palette in use
+    table: Option<Arc<GhostBlockEntityTable>>,
+    // per slot: each block-entity cell the build kept, its key, its position from the job's origin and its skull pose
+    entity_cells: Vec<Vec<BlockActorCell>>,
+    // the last frame's full-size slots in view that hold block-entity cells, farthest first, each with the world
+    // position its job's origin is drawn at
+    visible: Vec<(u32, [i32; 3])>,
 }
 
 // SAFETY: the raw game pointers and the meshes are used on the render thread only, under the runtime's lock; another
@@ -85,6 +100,10 @@ impl GhostRenderer {
             build_us: 0,
             cells_built: 0,
             skipped_cells: 0,
+            drawer: BlockActorDrawer::new(calls),
+            table: None,
+            entity_cells: Vec::new(),
+            visible: Vec::new(),
         }
     }
 
@@ -111,6 +130,91 @@ impl GhostRenderer {
         // SAFETY: forwarded to the caller
         let camera = unsafe { self.camera_of(entries, frame) }.unwrap_or([0.0; 3]);
         self.run_frame(world.as_ref(), &screen, ghost, camera);
+    }
+
+    /// After the player camera's own block-entity pass: draws the block-entity cells of the last frame's visible
+    /// slots in the client's current region, with the level of `client` for the actors loaded from NBT. The pass runs
+    /// inside `renderLevel`, before this frame's `run_frame`, so the current region is read here and nothing is drawn
+    /// unless it is still the joined one.
+    ///
+    /// # Safety
+    /// `calls` must hold the entries of the running build, `ctx` must be the live `BaseActorRenderContext` of the
+    /// running pass, and `client` null or the live client of the game.
+    #[allow(unsafe_code)]
+    pub unsafe fn after_render_block_entities(
+        &mut self,
+        entries: &GameEntries,
+        calls: &BlockActorCalls,
+        ghost: &SharedGhost,
+        skull: &SkullSlot,
+        client: Option<NonNull<c_void>>,
+        ctx: *mut c_void,
+    ) {
+        if self.visible.is_empty() || self.region.is_null() || !self.usable {
+            return;
+        }
+        let Some(client) = client else { return };
+        // SAFETY: the client the update detour saw, live while the game runs
+        let Some(game_client) = (unsafe { ClientInstance::from_raw(client.as_ptr(), entries) }) else { return };
+        let Some(region) = game_client.region() else { return };
+        let level = {
+            let client = client.as_ptr();
+            // SAFETY: the client the update detour saw, live while the game runs; the entry is the getLevel slot
+            let function = unsafe { RawObject::slot(client, calls.get_level_slot) };
+            // SAFETY: the slot holds `ClientLevel* ClientInstance::getLevel()`; the ClientLevel's ILevel base is at
+            // its start
+            function
+                .and_then(|function| unsafe { RawObject::call_pointer(function, client) })
+                .unwrap_or(std::ptr::null_mut())
+        };
+        // SAFETY: forwarded to the caller; the region is the client's current one
+        unsafe { self.draw_block_entities(calls, ghost, skull, ctx, region.as_ptr(), level) };
+    }
+
+    /// Draws the block-entity cells of the last frame's visible full-size slots through the drawer, in the joined
+    /// world's region; returns how many cells were rendered. Nothing outside a world, while the renderer is not
+    /// usable, when `region`, the client's current region, is not the joined one, or when the world epoch core last
+    /// published in `ghost` is not the joined one: the joined world may then be freed already, and the next frame
+    /// leaves it.
+    ///
+    /// # Safety
+    /// `calls` must hold the entries of the running build, `ctx` must be null or the live `BaseActorRenderContext` of
+    /// the running block-entity pass, and `level` null or the live client level. Render thread. The chest pair core
+    /// puts in a key needs no promise from the caller: the drawer writes the large chest fields only into an actor
+    /// whose `isType(Chest)` answers true, and draws any other actor as a single one.
+    #[allow(unsafe_code)]
+    pub unsafe fn draw_block_entities(
+        &mut self,
+        calls: &BlockActorCalls,
+        ghost: &SharedGhost,
+        skull: &SkullSlot,
+        ctx: *mut c_void,
+        region: *mut c_void,
+        level: *mut c_void,
+    ) -> u32 {
+        if self.region.is_null() || region != self.region || !self.usable {
+            return 0;
+        }
+        // a new world's region can sit at the old address; core's epoch moves once per world
+        if ghost.published_world_epoch() != self.world_epoch {
+            return 0;
+        }
+        let Self { drawer, blocks, region, visible, entity_cells, table, .. } = self;
+        let cells = visible.iter().flat_map(|(slot, base)| {
+            let base = *base;
+            entity_cells.get(*slot as usize).into_iter().flatten().map(move |cell| {
+                let [x, y, z] = cell.local;
+                (cell.key, BlockPos { x: base[0] + x, y: base[1] + y, z: base[2] + z }, cell.skull)
+            })
+        });
+        // SAFETY: the caller guarantees the entries, the context and the level; the checks above make the blocks and
+        // the region the joined world's; the drawer checks each chest actor's type before it writes
+        unsafe { drawer.draw(calls, blocks, ctx, *region, level, table.as_deref(), skull, cells) }
+    }
+
+    /// The block actors the drawer holds.
+    pub fn block_actors(&self) -> usize {
+        self.drawer.actors()
     }
 
     /// The block of palette id `id` in the joined world, for easy place's creative pick; null outside a world, while
@@ -208,6 +312,10 @@ impl GhostRenderer {
     // a Block pointer and the tessellator's region belong to the world that was left, so both go with the meshes
     fn leave(&mut self) {
         self.slots.iter_mut().for_each(|slot| *slot = None);
+        self.entity_cells.iter_mut().for_each(Vec::clear);
+        self.visible.clear();
+        self.drawer.clear();
+        self.table = None;
         self.group.clear();
         self.tessellator.leave();
         self.blocks.leave();
@@ -227,6 +335,9 @@ impl GhostRenderer {
             self.sizes = vec![[0; 3]; capacity];
             self.distance = vec![0.0; capacity];
             self.order = vec![0; capacity];
+            self.entity_cells.clear();
+            self.entity_cells.resize_with(capacity, Vec::new);
+            self.visible = Vec::with_capacity(capacity);
             self.group.resize(capacity);
         }
         // a group build of an earlier generation is never finished
@@ -236,16 +347,26 @@ impl GhostRenderer {
         self.generation = take.generation();
         if take.clear_all() {
             self.slots.iter_mut().for_each(|slot| *slot = None);
+            self.entity_cells.iter_mut().for_each(Vec::clear);
         }
         for free in take.frees() {
             if let Some(slot) = self.slots.get_mut(*free as usize) {
                 *slot = None;
                 self.group.free(*free);
             }
+            if let Some(cells) = self.entity_cells.get_mut(*free as usize) {
+                cells.clear();
+            }
         }
         self.palette_resolved = false;
         if let Some(palette) = take.palette() {
             self.palette_resolved = true;
+            // the actors' keys and every slot's block-entity cells name palette ids and NBT entries of the table
+            // that is gone; the jobs of this take fill the cells again
+            self.table = take.shared_block_entities();
+            self.drawer.clear();
+            self.entity_cells.iter_mut().for_each(Vec::clear);
+            self.visible.clear();
             let start = Instant::now();
             self.blocks.resolve(palette, take.rotation());
             curia::info!("ghost palette resolved", { us: Self::micros(start) });
@@ -293,6 +414,7 @@ impl GhostRenderer {
         }
         // the slot's mesh is no longer a group's
         self.group.free(job.slot);
+        self.keep_entity_cells(job, self.usable && built.ok);
         self.sizes[slot] = job.slot_size;
         self.cells_built += built.cells;
         self.skipped_cells += built.skipped;
@@ -365,6 +487,10 @@ impl GhostRenderer {
         if finished.ok {
             self.group.finish(job.slot, job.group_serial, bytes);
             self.sizes[slot] = job.slot_size;
+            // a group mesh draws no block-entity models
+            if let Some(cells) = self.entity_cells.get_mut(slot) {
+                cells.clear();
+            }
         } else {
             self.group.drop_build();
             curia::info!("ghost group failed", {
@@ -385,15 +511,49 @@ impl GhostRenderer {
         true
     }
 
+    // the job's block-entity cells in the slot's list, without the cells the skip rule left out at the build and the
+    // cells outside the job's part; the list is emptied when `keep` is false
+    fn keep_entity_cells(&mut self, job: &GhostJob, keep: bool) {
+        let Some(cells) = self.entity_cells.get_mut(job.slot as usize) else { return };
+        cells.clear();
+        if !keep {
+            return;
+        }
+        let skipped = self.tessellator.skipped();
+        let [sx, sy, sz] = job.dims.map(|side| side as usize);
+        let (px, pz) = (sx + 2, sz + 2);
+        for entity in &job.block_entities {
+            if skipped.binary_search(&entity.cell).is_ok() {
+                continue;
+            }
+            let index = entity.cell as usize;
+            let Some(palette) = job.cells.get(index).copied() else { continue };
+            if palette == u16::MAX {
+                continue;
+            }
+            // the padded grid runs X fastest, then Z, then Y, one cell of border on each side
+            let (x, rest) = (index % px, index / px);
+            let (z, y) = (rest % pz, rest / pz);
+            if x == 0 || y == 0 || z == 0 || x > sx || y > sy || z > sz {
+                continue;
+            }
+            let key = BlockActorKey::new(palette, entity.entry, entity.chest);
+            cells.push(BlockActorCell::new(key, [x as i32 - 1, y as i32 - 1, z as i32 - 1], entity.skull));
+        }
+    }
+
     #[allow(unsafe_code)]
     fn draw(&mut self, take: &GhostTake, screen: &ScreenContext, world: &GhostWorld, camera: [f32; 3]) -> u64 {
         self.culled = 0;
         self.meshes_drawn = 0;
+        self.visible.clear();
         if world.blend.is_null() || world.atlas.is_null() {
             return 0;
         }
         let start = Instant::now();
         let count = self.cull(take, screen, camera);
+        self.keep_visible(take, count);
+        let mut drawn = 0;
         if count > 0 {
             // SAFETY: the level renderer's live atlas texture holds live uses; the copy takes its own for the frame
             let mut texture = unsafe { (*world.atlas).clone_ref() };
@@ -409,19 +569,36 @@ impl GhostRenderer {
                 if pushed.is_some() {
                     // SAFETY: the item-in-hand renderer's material and a texture copy that holds its own uses
                     unsafe { mesh.render(screen, world.blend, &variant) };
+                    drawn += 1;
                 }
                 drop(pushed);
             }
             // SAFETY: the copy holds the two uses `clone_ref` took; the variant was a byte copy and is not released
             unsafe { texture.release() };
         }
-        self.meshes_drawn = count as u32;
+        self.meshes_drawn = drawn;
         Self::micros(start)
     }
 
-    // fills `order` with the indices of the listed draws that have a mesh and are in view, farthest first; a slot's
-    // box is outside when all eight corners lie beyond the same clip plane of projection x view, in camera-relative
-    // space. With no camera matrices nothing is culled. Returns how many are in `order` and counts the rest in
+    // the full-size slots of the first `count` entries of `order` that hold block-entity cells, in that order; a
+    // miniature draws no block-entity models
+    fn keep_visible(&mut self, take: &GhostTake, count: usize) {
+        let draws = take.draws();
+        for index in &self.order[..count] {
+            let Some(draw) = draws.get(*index as usize) else { continue };
+            if (draw.scale - 1.0).abs() > f32::EPSILON
+                || self.entity_cells.get(draw.slot as usize).is_none_or(Vec::is_empty)
+            {
+                continue;
+            }
+            let base = std::array::from_fn(|axis| draw.origin[axis] + draw.offset[axis]);
+            self.visible.push((draw.slot, base));
+        }
+    }
+
+    // fills `order` with the indices of the listed draws that have a mesh or block-entity cells and are in view,
+    // farthest first; a slot's box is outside when all eight corners lie beyond the same clip plane of projection x
+    // view, in camera-relative space. With no camera matrices nothing is culled. Returns how many are in `order` and counts the rest in
     // `culled`
     fn cull(&mut self, take: &GhostTake, screen: &ScreenContext, camera: [f32; 3]) -> usize {
         let clip = screen.clip_matrix();
@@ -432,7 +609,9 @@ impl GhostRenderer {
                 break;
             }
             let slot = draw.slot as usize;
-            if self.slots.get(slot).is_none_or(Option::is_none) {
+            let has_mesh = self.slots.get(slot).is_some_and(Option::is_some);
+            let has_entities = self.entity_cells.get(slot).is_some_and(|cells| !cells.is_empty());
+            if !has_mesh && !has_entities {
                 continue;
             }
             let size = self.sizes[slot];

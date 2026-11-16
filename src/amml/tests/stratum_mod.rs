@@ -5,7 +5,7 @@ use alaydriem_stratum::game::ClientLevel;
 use alaydriem_stratum::types::{StratumEntry, StratumFeature};
 use amml_game::{EntryId, EntryNeed, GameError};
 
-use crate::support::FakeResolver;
+use crate::support::{FakeGhost, FakeResolver};
 
 #[test]
 fn with_every_entry_no_feature_is_off() {
@@ -143,4 +143,25 @@ fn a_game_mode_mirror_that_does_not_fit_refuses_the_enable() {
 
     assert!(error.to_string().contains(StratumEntry::GAME_MODE_PLAYER.as_str()), "{error}");
     assert!(StratumMod::off_lines(&entries).is_empty());
+}
+
+#[test]
+fn a_missing_water_getter_turns_only_the_water_tint_off_and_the_ghost_calls_still_build() {
+    let values: Vec<_> = FakeResolver::values()
+        .into_iter()
+        .filter(|(id, _)| *id != StratumEntry::BIOME_COLOR_SAMPLING_GET_WATER_COLOR)
+        .collect();
+
+    let entries = StratumMod::resolve(&FakeResolver::new(&values)).unwrap();
+    let lines = StratumMod::off_lines(&entries);
+    let calls = alaydriem_stratum::types::GhostCalls::new(&entries, FakeGhost::heap_new, FakeGhost::heap_delete);
+
+    assert_eq!(lines.len(), 1);
+    assert!(lines[0].starts_with(&format!("{} is off", StratumFeature::WATER_TINT)), "{lines:?}");
+    let calls = calls.unwrap();
+    assert_eq!(
+        (calls.get_chunk_slot, calls.level_chunk_get_biome, calls.biome_get_water_color),
+        (0, 0, 0),
+        "the three water calls go off together"
+    );
 }

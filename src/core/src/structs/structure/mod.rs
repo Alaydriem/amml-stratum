@@ -1,3 +1,4 @@
+pub mod block_entities;
 pub mod block_layer;
 pub mod block_state;
 pub mod block_states;
@@ -8,6 +9,7 @@ pub mod state_value;
 #[allow(clippy::module_inception)]
 pub mod structure;
 
+pub use block_entities::BlockEntities;
 pub use block_layer::BlockLayer;
 pub use block_state::BlockState;
 pub use block_states::BlockStates;

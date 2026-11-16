@@ -34,6 +34,7 @@ impl GhostFixture {
             palette,
             primary: BlockLayer::new(cells),
             secondary: SparseLayer::default(),
+            block_entities: Default::default(),
         })
     }
 
@@ -45,6 +46,7 @@ impl GhostFixture {
             palette: vec![block],
             primary: BlockLayer::new(vec![0]),
             secondary: SparseLayer::default(),
+            block_entities: Default::default(),
         })
     }
 
@@ -58,6 +60,7 @@ impl GhostFixture {
             palette,
             primary: BlockLayer::new((0..count as u16).collect()),
             secondary: SparseLayer::default(),
+            block_entities: Default::default(),
         })
     }
 
@@ -92,15 +95,17 @@ impl GhostFixture {
             palette: palette.entries.clone(),
             primary: BlockLayer::new(cells),
             secondary: SparseLayer::default(),
+            block_entities: Default::default(),
         });
-        GhostBuild {
-            pieces: vec![GhostPiece { structure, world_min: min, remap: vec![0] }],
+        GhostBuild::new(
+            vec![GhostPiece { structure, world_min: min, remap: vec![0] }],
             palette,
             marker_block,
-            world_min: min,
-            world_max: max,
-            revision: 1,
-        }
+            min,
+            max,
+            1,
+            Rotation::R0,
+        )
     }
 
     pub fn marker(origin: [i32; 3], target: MarkerTarget) -> Marker {

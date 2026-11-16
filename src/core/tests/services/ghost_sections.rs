@@ -1,5 +1,15 @@
-use stratum_core::services::GhostSections;
-use stratum_core::structs::ghost::{GhostDraw, GhostJob, GhostJobMode, GhostPalette, GhostView, SectionPart};
+use std::sync::Arc;
+
+use stratum_core::services::{GhostSections, NbtReader, NbtWriter};
+use stratum_core::structs::ghost::{
+    ChestPair, GhostBlockEntity, GhostBlockEntityTable, GhostBuild, GhostDraw, GhostJob, GhostJobMode, GhostPalette,
+    GhostPiece, GhostView, SectionKey, SectionPart,
+};
+use stratum_core::structs::marker::Rotation;
+use stratum_core::structs::nbt::{NbtLimits, NbtTag};
+use stratum_core::structs::structure::{
+    BlockEntities, BlockLayer, BlockState, BlockStates, SparseLayer, StateValue, Structure, StructureSize,
+};
 
 use crate::support::{GhostFixture, SectionAssert};
 
@@ -339,4 +349,235 @@ fn member_and_finish_jobs_carry_the_group_frame() {
     assert_eq!(job.dims, [0; 3]);
     assert_eq!(job.origin, build.world_min);
     assert_eq!(job.slot_size, [20, 9, 33]);
+}
+
+// Builds that hold block actor blocks.
+struct ActorBuilds;
+
+impl ActorBuilds {
+    fn whole() -> SectionKey {
+        SectionKey { x: 0, y: 0, z: 0, layer: None, part: SectionPart::Whole }
+    }
+
+    fn chest_nbt(pair_x: i32) -> Vec<u8> {
+        NbtWriter::compound(
+            "",
+            &[("id", NbtTag::String("Chest".to_string())), ("pairx", NbtTag::Int(pair_x)), ("pairz", NbtTag::Int(0))],
+        )
+        .unwrap()
+    }
+
+    // One row along X of `blocks`, palette ids equal to the block order, with `nbt` on the given cells.
+    fn row(blocks: Vec<BlockState>, nbt: Vec<(u32, Vec<u8>)>) -> GhostBuild {
+        let count = blocks.len() as u32;
+        let mut block_entities = BlockEntities::new();
+        for (cell, bytes) in nbt {
+            block_entities.insert(cell, bytes);
+        }
+        let structure = Arc::new(Structure {
+            size: StructureSize::new(count, 1, 1),
+            world_origin: None,
+            palette: blocks.clone(),
+            primary: BlockLayer::new((0..count as u16).collect()),
+            secondary: SparseLayer::default(),
+            block_entities,
+        });
+        let remap = (0..count as u16).collect();
+        let mut palette = GhostPalette { entries: blocks };
+        let marker_block = palette.marker_id().unwrap();
+        GhostBuild::new(
+            vec![GhostPiece { structure, world_min: [0; 3], remap }],
+            palette,
+            marker_block,
+            [0; 3],
+            [count as i32 - 1, 0, 0],
+            1,
+            Rotation::R0,
+        )
+    }
+
+    fn block(name: &str, states: Vec<(&str, StateValue)>) -> BlockState {
+        let pairs = states.into_iter().map(|(key, value)| (key.to_string(), value)).collect();
+        BlockState::new(format!("minecraft:{name}"), BlockStates::new(pairs))
+    }
+
+    // Index of the world cell (x, 0, 0) in the padded grid of the whole section at the origin.
+    fn padded(x: u32) -> u32 {
+        (18 + 1) * 18 + x + 1
+    }
+}
+
+#[test]
+fn a_chest_cell_becomes_a_block_entity_ghost_with_its_entry() {
+    let chest = ActorBuilds::block("chest", Vec::new());
+    let build = ActorBuilds::row(
+        vec![chest.clone(), chest, ActorBuilds::block("stone", Vec::new())],
+        vec![(0, ActorBuilds::chest_nbt(1)), (1, ActorBuilds::chest_nbt(0))],
+    );
+    let mut job = GhostJob::new(ActorBuilds::whole());
+
+    GhostSections::fill_job(&build, ActorBuilds::whole(), &mut job);
+
+    // neither half says it leads, so the half with the smaller coordinate does; the other draws nothing
+    assert_eq!(job.block_entities, [GhostBlockEntity::new(ActorBuilds::padded(0), 0, Some(ChestPair::PlusX), None)]);
+}
+
+#[test]
+fn the_pair_nbt_is_removed_from_the_lead() {
+    let chest = ActorBuilds::block("chest", Vec::new());
+    let build = ActorBuilds::row(
+        vec![chest.clone(), chest.clone(), ActorBuilds::block("stone", Vec::new()), chest.clone(), chest],
+        vec![
+            (0, ActorBuilds::chest_nbt(1)),
+            (1, ActorBuilds::chest_nbt(0)),
+            (3, ActorBuilds::chest_nbt(4)),
+            (4, ActorBuilds::chest_nbt(3)),
+        ],
+    );
+    let mut job = GhostJob::new(ActorBuilds::whole());
+
+    GhostSections::fill_job(&build, ActorBuilds::whole(), &mut job);
+
+    assert_eq!(job.block_entities.len(), 2);
+    let (first, second) = (job.block_entities[0], job.block_entities[1]);
+    assert_eq!((first.chest, second.chest), (Some(ChestPair::PlusX), Some(ChestPair::PlusX)));
+    assert_eq!(first.entry, second.entry, "equal stripped NBT shares one table entry");
+    let table = GhostBlockEntityTable::from_build(&build);
+    assert_eq!(table.len(), 1);
+    let (_, root) = NbtReader::read(table.entry(first.entry).unwrap(), NbtLimits::STRUCTURE).unwrap();
+    assert!(matches!(root.get("id"), Some(NbtTag::String(id)) if id == "Chest"));
+    for key in ["pairx", "pairz", "pairlead"] {
+        assert!(root.get(key).is_none(), "{key} must not reach the game");
+    }
+}
+
+#[test]
+fn a_skull_cell_carries_its_pose_turned_with_the_ghost() {
+    let skull = |facing: i32| ActorBuilds::block("skeleton_skull", vec![("facing_direction", StateValue::Int(facing))]);
+    let nbt = NbtWriter::compound("", &[("Rotation", NbtTag::Float(45.0))]).unwrap();
+    for (quarters, rotation) in [Rotation::R0, Rotation::R90].into_iter().enumerate() {
+        let mut build = ActorBuilds::row(vec![skull(1), skull(2)], vec![(0, nbt.clone())]);
+        build.rotation = rotation;
+        let mut job = GhostJob::new(ActorBuilds::whole());
+
+        GhostSections::fill_job(&build, ActorBuilds::whole(), &mut job);
+
+        let poses: Vec<(u8, f32)> = job
+            .block_entities
+            .iter()
+            .map(|entity| entity.skull.map(|pose| (pose.face, pose.degrees)).unwrap())
+            .collect();
+        let wall = [2, 5][quarters];
+        assert_eq!(poses, [(1, 45.0 + 90.0 * quarters as f32), (wall, 0.0)]);
+    }
+}
+
+#[test]
+fn a_block_actor_cell_without_nbt_has_no_entry() {
+    let build = ActorBuilds::row(vec![ActorBuilds::block("bell", Vec::new())], Vec::new());
+    let mut job = GhostJob::new(ActorBuilds::whole());
+
+    GhostSections::fill_job(&build, ActorBuilds::whole(), &mut job);
+
+    assert_eq!(job.block_entities, [GhostBlockEntity::new(ActorBuilds::padded(0), GhostBlockEntity::NONE, None, None)]);
+}
+
+#[test]
+fn a_bed_foot_cell_is_not_a_block_entity_ghost() {
+    for quarters in 0..4 {
+        let bed = |head: bool| {
+            ActorBuilds::block(
+                "bed",
+                vec![("direction", StateValue::Int(quarters)), ("head_piece_bit", StateValue::Bool(head))],
+            )
+        };
+        let build = ActorBuilds::row(vec![bed(false), bed(true)], Vec::new());
+        let mut job = GhostJob::new(ActorBuilds::whole());
+
+        GhostSections::fill_job(&build, ActorBuilds::whole(), &mut job);
+
+        let cells: Vec<u32> = job.block_entities.iter().map(|entity| entity.cell).collect();
+        assert_eq!(cells, [ActorBuilds::padded(1)], "direction {quarters}");
+    }
+}
+
+#[test]
+fn a_group_job_has_no_block_entities() {
+    let build = ActorBuilds::row(vec![ActorBuilds::block("chest", Vec::new())], vec![(0, ActorBuilds::chest_nbt(0))]);
+    let mut job = GhostJob::new(ActorBuilds::whole());
+    GhostSections::fill_job(&build, ActorBuilds::whole(), &mut job);
+    assert_eq!(job.block_entities.len(), 1);
+
+    GhostSections::fill_member_job(&build, ActorBuilds::whole(), &mut job);
+    assert!(job.block_entities.is_empty());
+
+    GhostSections::fill_job(&build, ActorBuilds::whole(), &mut job);
+    GhostSections::fill_finish_job(&build, ActorBuilds::whole(), &mut job);
+    assert!(job.block_entities.is_empty());
+}
+
+#[test]
+fn the_marker_job_has_no_block_entities() {
+    let build = ActorBuilds::row(vec![ActorBuilds::block("chest", Vec::new())], Vec::new());
+    let mut job = GhostJob::new(ActorBuilds::whole());
+    GhostSections::fill_job(&build, ActorBuilds::whole(), &mut job);
+
+    GhostSections::fill_job(&build, GhostSections::MARKER_KEY, &mut job);
+
+    assert!(job.block_entities.is_empty());
+}
+
+#[test]
+fn a_chest_at_a_section_border_is_in_its_own_job_only() {
+    let mut blocks = vec![ActorBuilds::block("stone", Vec::new()); 17];
+    blocks[16] = ActorBuilds::block("chest", Vec::new());
+    let build = ActorBuilds::row(blocks, vec![(16, ActorBuilds::chest_nbt(16))]);
+    let first = ActorBuilds::whole();
+    let second = SectionKey { x: 1, ..first };
+
+    let mut job = GhostJob::new(first);
+    GhostSections::fill_job(&build, first, &mut job);
+    assert!(job.block_entities.is_empty());
+
+    GhostSections::fill_job(&build, second, &mut job);
+    assert_eq!(job.block_entities, [GhostBlockEntity::new((18 + 1) * 18 + 1, 0, None, None)]);
+}
+
+#[test]
+fn the_table_stops_at_its_bound_and_later_cells_have_no_id() {
+    let pieces = 5;
+    let per_piece = BlockEntities::MAX_ENTRIES as u32;
+    let stone = ActorBuilds::block("stone", Vec::new());
+    let mut built = Vec::new();
+    for piece in 0..pieces {
+        let mut block_entities = BlockEntities::new();
+        for cell in 0..per_piece {
+            block_entities.insert(cell, vec![cell as u8, (cell >> 8) as u8, piece as u8]);
+        }
+        let structure = Arc::new(Structure {
+            size: StructureSize::new(per_piece, 1, 1),
+            world_origin: None,
+            palette: vec![stone.clone()],
+            primary: BlockLayer::new(vec![0; per_piece as usize]),
+            secondary: SparseLayer::default(),
+            block_entities,
+        });
+        built.push(GhostPiece { structure, world_min: [piece * per_piece as i32, 0, 0], remap: vec![0] });
+    }
+    let build = GhostBuild::new(
+        built,
+        GhostPalette { entries: vec![stone] },
+        0,
+        [0; 3],
+        [pieces * per_piece as i32 - 1, 0, 0],
+        1,
+        Rotation::R0,
+    );
+
+    let table = GhostBlockEntityTable::from_build(&build);
+
+    assert_eq!(table.len(), GhostBlockEntityTable::MAX_ENTRIES);
+    assert_eq!(table.entry(GhostBlockEntityTable::MAX_ENTRIES as u32), None);
+    assert_eq!(build.block_entity_id(3, [per_piece - 1, 0, 0]), Some(GhostBlockEntityTable::MAX_ENTRIES as u32 - 1));
+    assert_eq!(build.block_entity_id(4, [0, 0, 0]), None);
 }

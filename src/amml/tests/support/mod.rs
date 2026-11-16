@@ -1,5 +1,6 @@
 pub mod dialog_seen;
 pub mod easy_place;
+pub mod fake_block_actor;
 pub mod fake_buffer;
 pub mod fake_dialog;
 pub mod fake_ghost;
@@ -20,6 +21,7 @@ pub mod session;
 
 pub use dialog_seen::DialogSeen;
 pub use easy_place::EasyPlace;
+pub use fake_block_actor::FakeBlockActor;
 pub use fake_buffer::FakeBuffer;
 pub use fake_dialog::FakeDialog;
 pub use fake_ghost::FakeGhost;

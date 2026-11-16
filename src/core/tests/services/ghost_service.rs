@@ -3,14 +3,17 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use stratum_core::config::GhostConfig;
-use stratum_core::services::{GhostSections, GhostService};
+use stratum_core::services::{GhostSections, GhostService, NbtWriter};
 use stratum_core::structs::ghost::{
     GhostDraw, GhostFrame, GhostJob, GhostJobMode, GhostPalette, GhostReport, MiniatureGroups, SectionKey, SectionPart,
     SlotBuilt,
 };
 use stratum_core::structs::library::{Library, StructureId};
 use stratum_core::structs::marker::{Marker, MarkerId, MarkerTarget, OpacityStep, Rotation, ViewMode};
-use stratum_core::structs::structure::{BlockLayer, BlockState, BlockStates, SparseLayer, Structure, StructureSize};
+use stratum_core::structs::nbt::NbtTag;
+use stratum_core::structs::structure::{
+    BlockEntities, BlockLayer, BlockState, BlockStates, SparseLayer, Structure, StructureSize,
+};
 
 use crate::support::{Frames, GhostFixture};
 
@@ -989,6 +992,7 @@ fn shutdown_with_a_turn_in_flight_returns_at_once() {
         palette: vec![BlockState::new("minecraft:stone".to_string(), BlockStates::default())],
         primary: BlockLayer::new(vec![0; cells]),
         secondary: SparseLayer::default(),
+        block_entities: Default::default(),
     });
     let loaded = [(7, big)];
     let turned = Rig::marker(1, Rotation::R90);
@@ -1381,4 +1385,70 @@ fn a_hidden_build_has_no_aim_view() {
 
     rig.update_hidden(&marker, &loaded);
     assert!(rig.service.aim_view().is_none());
+}
+
+#[test]
+fn the_block_entity_table_goes_with_the_palette_on_a_new_generation_and_on_a_turn() {
+    let mut rig = Rig::new();
+    let shulker =
+        NbtWriter::compound("", &[("id", NbtTag::String("ShulkerBox".to_string())), ("facing", NbtTag::Byte(2))])
+            .unwrap();
+    let mut structure = (*GhostFixture::structure([3, 1, 1], &["minecraft:shulker_box"; 3])).clone();
+    let mut block_entities = BlockEntities::new();
+    assert!(block_entities.insert(1, shulker.clone()));
+    structure.block_entities = block_entities;
+    let loaded = [(7, Arc::new(structure))];
+    let marker = Rig::marker(1, Rotation::R0);
+    let mut tables = Vec::new();
+    for _ in 0..4 {
+        rig.update(Some(&marker), &loaded);
+        assert_eq!(rig.frame.palette.is_some(), rig.frame.block_entities.is_some());
+        if let Some(table) = rig.frame.block_entities.clone() {
+            tables.push((rig.frame.generation, table));
+        }
+        rig.answer_jobs();
+    }
+    assert_eq!(tables.len(), 1, "the new generation sends the table once, with its palette");
+    let (generation, table) = &tables[0];
+    assert_eq!(table.len(), 1);
+    assert_eq!(table.entry(0), Some(shulker.as_slice()));
+
+    let turned = Rig::marker(1, Rotation::R90);
+    rig.await_turn(&turned, &loaded);
+
+    assert_eq!(rig.frame.generation, *generation, "a turn keeps the generation");
+    assert!(rig.frame.palette.is_some());
+    let resent = rig.frame.block_entities.clone().expect("the resend carries the table of the turned build");
+    assert_eq!(resent.len(), 1);
+    assert_ne!(resent.entry(0), Some(shulker.as_slice()), "the turned shulker faces another way");
+}
+
+#[test]
+fn a_structure_with_the_same_palette_and_new_nbt_sends_its_table() {
+    let mut rig = Rig::new();
+    let shulker = |facing: i8| {
+        NbtWriter::compound("", &[("id", NbtTag::String("ShulkerBox".to_string())), ("facing", NbtTag::Byte(facing))])
+            .unwrap()
+    };
+    let structure = |facing: i8| {
+        let mut structure = (*GhostFixture::structure([3, 1, 1], &["minecraft:shulker_box"; 3])).clone();
+        let mut block_entities = BlockEntities::new();
+        assert!(block_entities.insert(1, shulker(facing)));
+        structure.block_entities = block_entities;
+        Arc::new(structure)
+    };
+    let marker = Rig::marker(1, Rotation::R0);
+    rig.run_to_rest(&marker, &[(7, structure(2))]);
+
+    let edited = [(7, structure(3))];
+    rig.service.library_changed();
+    let mut sent = None;
+    for _ in 0..4 {
+        rig.update(Some(&marker), &edited);
+        sent = sent.or_else(|| rig.frame.block_entities.clone());
+        rig.answer_jobs();
+    }
+
+    let table = sent.expect("the edited structure's table reaches the frame");
+    assert_eq!(table.entry(0), Some(shulker(3).as_slice()));
 }

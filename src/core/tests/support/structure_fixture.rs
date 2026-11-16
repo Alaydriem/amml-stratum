@@ -26,6 +26,8 @@ pub struct StructureFixture {
     // When set, writes `compression` with this method. For any method but 0, `structure` is a Byte
     // Array holding the zlib-compressed structure compound, as newer game versions write it.
     compression: Option<i32>,
+    // block_position_data entries: key and block_entity_data fields, in file order.
+    block_entities: Vec<(String, Vec<(String, NbtTag)>)>,
 }
 
 impl StructureFixture {
@@ -45,6 +47,7 @@ impl StructureFixture {
             array_header: false,
             primary_only: false,
             compression: None,
+            block_entities: Vec::new(),
         }
     }
 
@@ -86,6 +89,19 @@ impl StructureFixture {
     // Adds `count` palette entries that no cell uses.
     pub fn unused_entries(mut self, count: usize) -> Self {
         self.palette.extend((0..count).map(|n| (format!("test:unused_{n}"), Vec::new())));
+        self
+    }
+
+    // Gives one cell block entity data, keyed by its cell index.
+    pub fn block_entity(self, x: usize, y: usize, z: usize, data: Vec<(&str, NbtTag)>) -> Self {
+        let key = self.cell(x, y, z).to_string();
+        self.block_entity_key(&key, data)
+    }
+
+    // Writes a block_position_data entry under any key, as a damaged file might.
+    pub fn block_entity_key(mut self, key: &str, data: Vec<(&str, NbtTag)>) -> Self {
+        let data = data.into_iter().map(|(name, tag)| (name.to_string(), tag)).collect();
+        self.block_entities.push((key.to_string(), data));
         self
     }
 
@@ -148,9 +164,19 @@ impl StructureFixture {
                 })
                 .collect(),
         );
+        let positions = NbtCompound::new(
+            self.block_entities
+                .iter()
+                .map(|(key, data)| {
+                    let data = NbtTag::Compound(NbtCompound::new(data.clone()));
+                    let position = NbtCompound::new(vec![("block_entity_data".to_string(), data)]);
+                    (key.clone(), NbtTag::Compound(position))
+                })
+                .collect(),
+        );
         let default = NbtCompound::new(vec![
             ("block_palette".to_string(), block_palette),
-            ("block_position_data".to_string(), NbtTag::Compound(NbtCompound::default())),
+            ("block_position_data".to_string(), NbtTag::Compound(positions)),
         ]);
         let palette = NbtCompound::new(vec![("default".to_string(), NbtTag::Compound(default))]);
 

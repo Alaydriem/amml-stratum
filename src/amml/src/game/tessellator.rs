@@ -118,6 +118,13 @@ impl Tessellator {
         unsafe { (*self.ptr.as_ptr()).count = count };
     }
 
+    /// Adds `vertices` to `mCount`, for vertices appended to the mesh data by hand.
+    #[allow(unsafe_code)]
+    pub fn add_count(&mut self, vertices: u32) {
+        // SAFETY: `from_raw` guarantees a live Tessellator laid out as the mirror
+        unsafe { (*self.ptr.as_ptr()).count = (*self.ptr.as_ptr()).count.saturating_add(vertices) };
+    }
+
     /// The vertices the tessellator holds: the length of `mMeshData.mPositions`.
     #[allow(unsafe_code)]
     pub fn vertex_count(&self) -> usize {

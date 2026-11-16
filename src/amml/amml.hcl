@@ -40,7 +40,8 @@ entries = [
   "BlockSerializationUtils.tryGetBlockFromNBT",
   "CompoundTag.dtor",
   "BlockGraphics.getForBlock",
-  "BlockGraphics.mRenderLayer",
+  "Block.getRenderLayer",
+  "BlockType.getExtraRenderLayers",
   "VanillaBlockStateTransformUtils.transformBlock",
   "VanillaBlockStateTransformUtils.hasTransformableWallStates",
   "VanillaBlockStateTransformUtils.transformWallConnectionTypes",
@@ -89,6 +90,30 @@ entries = [
   # optional, stratum.world_folder
   "DBStorage.ctor",
   "DBStorage.checkShutdownDone",
+  # optional, stratum.water_tint
+  "BlockSource.getChunk",
+  "LevelChunk.getBiome",
+  "BiomeColorSampling.getWaterColor",
+  # optional, stratum.block_actors
+  "LevelRendererCamera.renderBlockEntitiesBody",
+  "LevelRendererPlayer.vtable",
+  "BlockActorRenderDispatcher.render",
+  "BaseActorRenderContext.mBlockEntityRenderDispatcher",
+  "BaseActorRenderContext.mImpl",
+  "BaseActorRenderContext.Impl.mCameraTargetPosition",
+  "VanillaBlockActorFactory.createBlockActor",
+  "BlockActor.loadStatic",
+  "BlockActor._getRenderComponent",
+  "DefaultDataLoadHelper.vtable",
+  # optional, stratum.large_chests
+  "BlockActor.mPosition",
+  "BlockActor.isType",
+  "ChestBlockActor.mPairFlags",
+  "ChestBlockActor.mLargeChestPaired",
+  "ChestBlockActor.mLargeChestPairedPosition",
+  # optional, stratum.skulls
+  "SkullBlockRenderer.renderSkull",
+  "BlockType.mNameInfo.mFullName",
   # required: easy place, the build hooks, the probe, the inventory and the item stack request
   "LegacyClientNetworkHandler.vtable",
   "ClientNetworkHandler.handle.ItemStackResponsePacket",

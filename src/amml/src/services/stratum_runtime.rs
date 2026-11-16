@@ -15,14 +15,14 @@ use amml_sdk::{HookHandle, ModDirs, ModRuntime};
 
 use crate::easy_place::UseHooks;
 use crate::game::ClientWorld;
-use crate::ghost::BlockChangeListener;
+use crate::ghost::{BlockChangeListener, SkullSlot};
 use crate::services::{BlockChangeHub, BlockChangeQueue, RendererSlot, SharedGhost, StratumHandle, WorldFolder};
 #[cfg(feature = "gate")]
 use crate::services::{GatePlacer, GateRequest, GateRunner};
 use crate::traits::UseCore;
 use crate::types::{
-    BlockChange, CoreState, GhostCalls, LinkState, ListenerSlots, PacketCalls, PathList, PlayerCalls, QueuedChange,
-    StratumEntry, UseCalls,
+    BlockActorCalls, BlockChange, CoreState, GhostCalls, LinkState, ListenerSlots, PacketCalls, PathList, PlayerCalls,
+    QueuedChange, StratumEntry, UseCalls,
 };
 
 // what the detours share: the stop latch, the client the tick saw last, the entries, the folders, the core with its
@@ -34,6 +34,10 @@ pub struct StratumRuntime {
     latch: StopLatch,
     client: HeldClient,
     entries: OnceLock<GameEntries>,
+    // the block-entity ghost calls of the kept entries; None while the feature is off
+    block_actors: OnceLock<Option<BlockActorCalls>>,
+    // the pose of the skull ghost the block-entity pass is drawing, for the skull detour; render thread only
+    skull: SkullSlot,
     dirs: ModDirs,
     core: Mutex<CoreState>,
     // the ghost frames and reports of the running core, for the render thread
@@ -66,16 +70,18 @@ static RUNTIME: OnceLock<StratumRuntime> = OnceLock::new();
 static BLOCK_HUB: BlockChangeHub = BlockChangeHub::new(StratumRuntime::block_changed);
 
 impl StratumRuntime {
-    // the detours: client update, focus loss, world storage made and shut down, and render level; then easy place's
-    // screen controller destructor, HUD tick, item stack response, container open and container close handlers,
-    // game mode build and build action
-    pub const HOOK_CAPACITY: usize = 12;
+    // the detours: client update, focus loss, world storage made and shut down, render level and the block-entity
+    // pass with its skull draw; then easy place's screen controller destructor, HUD tick, item stack response,
+    // container open and container close handlers, game mode build and build action
+    pub const HOOK_CAPACITY: usize = 14;
 
     pub fn new(dirs: ModDirs) -> Self {
         Self {
             latch: StopLatch::new(),
             client: HeldClient::new(),
             entries: OnceLock::new(),
+            block_actors: OnceLock::new(),
+            skull: SkullSlot::new(),
             dirs,
             core: Mutex::new(CoreState::new()),
             ghost: Mutex::new(None),
@@ -107,6 +113,11 @@ impl StratumRuntime {
     // raised by disable and by a panic in a hook body
     pub fn latch(&self) -> &StopLatch {
         &self.latch
+    }
+
+    // the skull slot the block-entity pass sets around each skull ghost draw and the skull detour reads
+    pub fn skull_slot(&self) -> &SkullSlot {
+        &self.skull
     }
 
     // the entries the first enable kept
@@ -145,6 +156,9 @@ impl StratumRuntime {
     // latch goes down
     pub fn start(&self, entries: GameEntries, calls: &GhostCalls) {
         let _ = self.entries.set(entries);
+        if let Some(entries) = self.entries.get() {
+            let _ = self.block_actors.set(BlockActorCalls::new(entries, Self::heap_delete));
+        }
         self.renderer.install(calls);
         self.start_easy_place();
         #[cfg(feature = "gate")]
@@ -378,6 +392,30 @@ impl StratumRuntime {
                     frame as *const _,
                     &ghost,
                 )
+            };
+        });
+    }
+
+    // the body of the block-entity pass detour, after the game's own opaque pass: the ghost's block-entity cells, for
+    // the player camera only; every other camera passes through
+    #[allow(unsafe_code)]
+    pub fn render_block_entities(&self, camera: usize, ctx: usize) {
+        if self.latch.raised() || camera == 0 || ctx == 0 {
+            return;
+        }
+        let Some(calls) = self.block_actors.get().copied().flatten() else { return };
+        // SAFETY: the game passes its live LevelRendererCamera, whose first qword is its vtable
+        let vtable = unsafe { (camera as *const usize).read() };
+        if vtable != calls.level_renderer_player_vtable {
+            return;
+        }
+        let Some(entries) = self.entries.get() else { return };
+        let client = self.client.get(&self.latch);
+        let Some(ghost) = self.ghost.try_lock().ok().and_then(|ghost| ghost.clone()) else { return };
+        self.renderer.frame(|ghost_renderer| {
+            // SAFETY: the render context of the running pass, live for it, and the client the last tick saw
+            unsafe {
+                ghost_renderer.after_render_block_entities(entries, &calls, &ghost, &self.skull, client, ctx as *mut _)
             };
         });
     }

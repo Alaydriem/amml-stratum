@@ -2,7 +2,8 @@ use std::sync::Arc;
 
 use alaydriem_stratum::services::{ReportQueue, SharedGhost};
 use stratum_core::structs::ghost::{
-    GhostDraw, GhostFrame, GhostJob, GhostPalette, GhostReport, SectionKey, SectionPart, SlotBuilt,
+    GhostBlockEntity, GhostBlockEntityTable, GhostDraw, GhostFrame, GhostJob, GhostPalette, GhostReport, SectionKey,
+    SectionPart, SlotBuilt,
 };
 use stratum_core::structs::structure::{BlockState, BlockStates};
 
@@ -420,4 +421,44 @@ fn a_fold_that_keeps_every_entry_drops_nothing() {
     assert_eq!(ghost.merged_reports(), 2);
     assert_eq!(ghost.dropped_reports(), 0);
     assert_eq!(ghost.dropped_entries(), 0);
+}
+
+#[test]
+fn the_take_carries_the_table_and_the_job_lists() {
+    let ghost = SharedGhost::new();
+    let mut frame = Frames::frame(1);
+    let mut job = Frames::job(0, 1);
+    job.block_entities.push(GhostBlockEntity::new(13, 1, None, None));
+    job.block_entities.push(GhostBlockEntity::new(14, GhostBlockEntity::NONE, None, None));
+    frame.jobs.push(job);
+    frame.palette = Some(Frames::palette());
+    frame.block_entities = Some(Arc::new(GhostBlockEntityTable::new(vec![vec![1], vec![2, 3]])));
+    ghost.publish(&frame);
+
+    {
+        let first = ghost.take().unwrap();
+        let table = first.block_entities().unwrap();
+        assert_eq!((table.entry(0), table.entry(1), table.entry(2)), (Some(&[1][..]), Some(&[2, 3][..]), None));
+        assert_eq!(
+            first.jobs()[0].1.block_entities,
+            [GhostBlockEntity::new(13, 1, None, None), GhostBlockEntity::new(14, GhostBlockEntity::NONE, None, None)]
+        );
+    }
+    let second = ghost.take().unwrap();
+
+    assert!(second.block_entities().is_none());
+}
+
+#[test]
+fn an_untaken_table_latches_with_its_palette() {
+    let ghost = SharedGhost::new();
+    let mut first = Frames::frame(1);
+    first.palette = Some(Frames::palette());
+    first.block_entities = Some(Arc::new(GhostBlockEntityTable::new(vec![vec![9]])));
+    ghost.publish(&first);
+    ghost.publish(&Frames::frame(2));
+
+    let take = ghost.take().unwrap();
+
+    assert_eq!(take.block_entities().and_then(|table| table.entry(0)), Some(&[9][..]));
 }

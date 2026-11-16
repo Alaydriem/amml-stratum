@@ -3,13 +3,13 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use crate::errors::GhostError;
-use crate::services::LayoutSolver;
+use crate::services::{BlockEntityTurner, LayoutSolver};
 use crate::structs::ghost::PlacedStructure;
 use crate::structs::ghost::{GhostBuild, GhostPalette, GhostPiece};
 use crate::structs::layout::LayoutIssue;
 use crate::structs::library::{Library, ProjectId, ProjectKind, StructureEntry, StructureId};
 use crate::structs::marker::{Marker, MarkerTarget, Rotation};
-use crate::structs::structure::{BlockLayer, BlockState, SparseLayer, Structure, StructureSize};
+use crate::structs::structure::{BlockEntities, BlockLayer, BlockState, SparseLayer, Structure, StructureSize};
 
 // Turns a marker and the loaded structures into one world-space build with a shared palette.
 pub struct GhostAssembler;
@@ -159,7 +159,11 @@ impl GhostAssembler {
             min[axis] = i32::try_from(world_min[axis]).map_err(|_| GhostError::Layout(LayoutIssue::TooLarge))?;
             max[axis] = i32::try_from(world_max[axis]).map_err(|_| GhostError::Layout(LayoutIssue::TooLarge))?;
         }
-        Ok(GhostBuild { pieces, palette, marker_block, world_min: min, world_max: max, revision })
+        let build = GhostBuild::new(pieces, palette, marker_block, min, max, revision, rotation);
+        Ok(match reuse {
+            Some(previous) => build.sharing_table_with(previous),
+            None => build,
+        })
     }
 
     // A copy of `structure` with every cell at its turned position, so that the copy's cell
@@ -182,10 +186,14 @@ impl GhostAssembler {
             palette: Vec::new(),
             primary: BlockLayer::default(),
             secondary: SparseLayer::default(),
+            block_entities: Default::default(),
+        };
+        let turned_local = |x: u32, y: u32, z: u32| -> [u32; 3] {
+            let turned = rotation.turn_offset([i64::from(x), i64::from(y), i64::from(z)]);
+            [0, 1, 2].map(|axis| u32::try_from(turned[axis] - corner[axis]).unwrap_or(u32::MAX))
         };
         let moved = |x: u32, y: u32, z: u32| -> usize {
-            let turned = rotation.turn_offset([i64::from(x), i64::from(y), i64::from(z)]);
-            let local = [0, 1, 2].map(|axis| u32::try_from(turned[axis] - corner[axis]).unwrap_or(u32::MAX));
+            let local = turned_local(x, y, z);
             empty.index_of(local[0], local[1], local[2])
         };
         let source = structure.primary.as_slice();
@@ -213,12 +221,58 @@ impl GhostAssembler {
                 (u32::try_from(moved(x, y, z)).unwrap_or(u32::MAX), index)
             })
             .unzip();
+        let block_entities = Self::turn_block_entities(structure, rotation, turned_local, moved);
         Some(Structure {
             palette: structure.palette.clone(),
             primary: BlockLayer::new(cells),
             secondary: SparseLayer::new(waterlog_cells, waterlog_blocks),
+            block_entities,
             ..empty
         })
+    }
+
+    // The block entities of `structure` on their turned cells, with their NBT turned. NBT that does
+    // not depend on the cell is turned once per distinct entry.
+    fn turn_block_entities(
+        structure: &Structure,
+        rotation: Rotation,
+        turned_local: impl Fn(u32, u32, u32) -> [u32; 3],
+        moved: impl Fn(u32, u32, u32) -> usize,
+    ) -> BlockEntities {
+        let mut turned = BlockEntities::new();
+        let (sy, sz) = (structure.size.y.max(1), structure.size.z.max(1));
+        // Entry to (depends on the cell, its turned bytes when they differ from the source).
+        let mut shared: HashMap<u32, (bool, Option<Vec<u8>>)> = HashMap::new();
+        for (cell, entry) in structure.block_entities.cells() {
+            let Some(nbt) = structure.block_entities.entry(entry) else { continue };
+            let (x, y, z) = (cell / (sy * sz), (cell / sz) % sy, cell % sz);
+            if x >= structure.size.x {
+                continue;
+            }
+            let Ok(target) = u32::try_from(moved(x, y, z)) else { continue };
+            let (depends, fixed) = shared.entry(entry).or_insert_with(|| {
+                if BlockEntityTurner::depends_on_cell(nbt) {
+                    (true, None)
+                } else {
+                    (false, BlockEntityTurner::turn(nbt, rotation, [0; 3], [0; 3], None))
+                }
+            });
+            let bytes = if *depends {
+                let local = |x: u32, y: u32, z: u32| [x, y, z].map(|value| i32::try_from(value).unwrap_or(i32::MAX));
+                let at = turned_local(x, y, z);
+                BlockEntityTurner::turn(
+                    nbt,
+                    rotation,
+                    local(x, y, z),
+                    local(at[0], at[1], at[2]),
+                    structure.world_origin,
+                )
+            } else {
+                fixed.clone()
+            };
+            turned.insert(target, bytes.unwrap_or_else(|| nbt.to_vec()));
+        }
+        turned
     }
 
     // Gives each block state a cell uses a build palette id. Air, structure void and indices no

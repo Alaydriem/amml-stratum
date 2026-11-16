@@ -1,11 +1,11 @@
 use std::alloc::{Layout, alloc_zeroed, dealloc};
 use std::ffi::c_void;
-use std::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU32, AtomicUsize, Ordering};
 use std::sync::{Mutex, OnceLock};
 
 use alaydriem_stratum::game::{
-    BlockTessellatorCacheLayout, MatrixStackRefLayout, MeshDataLayout, MeshLayout2651, StringByteInputLayout,
-    TessellatorLayout, TextureVariant,
+    BlockTessellatorCacheLayout, BlockTessellatorLayout, GameVec, MatrixStackRefLayout, MeshDataLayout, MeshLayout2651,
+    StringByteInputLayout, TessellatorLayout, TextureVariant,
 };
 use alaydriem_stratum::types::GhostCalls;
 use amml_game::{BlockPos, HashedStringLayout, StopLatch};
@@ -23,10 +23,23 @@ pub const MESH_MARK: u64 = 0x4D45_5348;
 pub const KNOWN_NAME: &str = "minecraft:oak_stairs";
 /// The fake tag size the game allocates in `NbtIo::read`.
 pub const TAG_BYTES: usize = 0x18;
-/// The render layer the fake block graphics hold.
+/// The main render layer the fake `Block::getRenderLayer` gives every block.
 pub const RENDER_LAYER: u8 = 3;
+/// An extra layer mask with one bit, Opaque, as honey and slime have.
+pub const EXTRA_LAYERS: u32 = 0x20;
+/// The slot of `getExtraRenderLayers` in the fake block type vtable.
+pub const EXTRA_LAYERS_SLOT: u64 = 124;
 /// Where the fake `BlockType` holds `mTintMethod`.
 pub const TINT_METHOD: u64 = 0x17C;
+/// The tint method of the fake leaves block, a policy method.
+pub const LEAVES_TINT: u8 = 1;
+/// The tint method of the fake water block, `TintMethod::Water`.
+pub const WATER_TINT: u8 = 6;
+/// The slot of `BlockSource::getChunk(int, int)` in the fake region vtable.
+pub const GET_CHUNK_SLOT: u64 = 42;
+/// The chunk and the biome the fakes give; any non-null value.
+const FAKE_CHUNK: usize = 0xC4A0;
+const FAKE_BIOME: usize = 0xB10E;
 /// The vertices the fake vertex pool holds; a test build stays far below.
 const POOL_VERTICES: usize = 1 << 14;
 
@@ -54,7 +67,16 @@ pub static BT_REGION: AtomicUsize = AtomicUsize::new(0);
 /// Each `setRegion` (with the region) and each destructor (with the tessellator's region then) in call order.
 pub static BT_EVENTS: Mutex<Vec<(&'static str, usize)>> = Mutex::new(Vec::new());
 pub static TESSELLATE_CALLS: AtomicU32 = AtomicU32::new(0);
+pub static RENDER_LAYER_CALLS: AtomicU32 = AtomicU32::new(0);
+/// The mask the fake `BlockType::getExtraRenderLayers` gives every block type; 0, one pass per cell, unless a test
+/// sets it.
+pub static EXTRA_LAYER_MASK: AtomicU32 = AtomicU32::new(0);
+/// The `mRenderingLayer` of each fake `tessellateInWorld` call, in order.
+pub static TESSELLATED_LAYERS: Mutex<Vec<i32>> = Mutex::new(Vec::new());
 pub static TESSELLATE_OK: AtomicBool = AtomicBool::new(true);
+/// When set, every tessellation after the winding probe writes no vertices, as the game's block tessellator does for a
+/// block it leaves to the block actor renderer.
+pub static TESSELLATE_EMPTY: AtomicBool = AtomicBool::new(false);
 /// The fake `tessellateInWorld` fails on this call (1-based), part way through its quad: it writes 3 of the 4
 /// vertices and returns false; 0 never.
 pub static TESSELLATE_FAIL_AT: AtomicU32 = AtomicU32::new(0);
@@ -79,11 +101,49 @@ pub static HEAP_FREED: Mutex<Vec<usize>> = Mutex::new(Vec::new());
 pub static MESH_DATA_DTOR_CALLS: AtomicU32 = AtomicU32::new(0);
 pub static MOVE_ASSIGN_CALLS: AtomicU32 = AtomicU32::new(0);
 pub static MATRIX_POPS: AtomicU32 = AtomicU32::new(0);
+/// One world position and the block the fake world holds there; air everywhere else.
+pub static WORLD_BLOCK_AT: Mutex<Option<(BlockPos, usize)>> = Mutex::new(None);
+
+/// The fake block an exact NBT lookup gives in place of `stratum:exact`, when set.
+pub static EXACT_AS: Mutex<Option<&'static str>> = Mutex::new(None);
+/// The colour the fake tessellation policy gives, and how many times it was asked.
+pub static POLICY_COLOUR: Mutex<[f32; 4]> = Mutex::new([0.0; 4]);
+pub static POLICY_CALLS: AtomicU32 = AtomicU32::new(0);
+/// Whether the fake `getChunk` gives no chunk.
+pub static CHUNK_NULL: AtomicBool = AtomicBool::new(false);
+/// Whether the fake `getBiome` gives no biome.
+pub static BIOME_NULL: AtomicBool = AtomicBool::new(false);
+/// The packed colour the fake `getWaterColor` gives, `a << 24 | r << 16 | g << 8 | b`.
+pub static WATER_ARGB: AtomicU32 = AtomicU32::new(0);
+pub static WATER_COLOR_CALLS: AtomicU32 = AtomicU32::new(0);
+/// The `(x, z)` of each fake `getChunk` call, in order.
+pub static CHUNK_QUERIES: Mutex<Vec<(i32, i32)>> = Mutex::new(Vec::new());
+/// The packed `ChunkBlockPos` (`x | z << 8 | y << 16`) of each fake `getBiome` call, in order.
+pub static BIOME_QUERIES: Mutex<Vec<u32>> = Mutex::new(Vec::new());
+/// The vertex colours of each mesh the fake end made, in order.
+pub static ENDED_COLORS: Mutex<Vec<Vec<u32>>> = Mutex::new(Vec::new());
+/// The vertex positions of each mesh the fake end made, in order.
+pub static ENDED_POSITIONS: Mutex<Vec<Vec<[f32; 3]>>> = Mutex::new(Vec::new());
+/// The extra per-vertex vectors the fake `tessellateInWorld` fills next to the positions: `EXTRA_NONE`, `EXTRA_FULL`
+/// (normals, tangents and the first UV set, one entry per vertex) or `EXTRA_SHORT` (a normal vector with 2 entries).
+pub static FILL_EXTRA: AtomicU32 = AtomicU32::new(EXTRA_NONE);
+pub const EXTRA_NONE: u32 = 0;
+pub const EXTRA_FULL: u32 = 1;
+pub const EXTRA_SHORT: u32 = 2;
+/// The normals, tangents and first UV set of each mesh the fake end made, in order.
+pub static ENDED_EXTRA: Mutex<Vec<EndedExtra>> = Mutex::new(Vec::new());
+pub type EndedExtra = (Vec<[f32; 4]>, Vec<[f32; 4]>, Vec<[f32; 2]>);
+/// The `mBlockShape` the fake block graphics hold when the game is asked for them; 0, `BlockShape::Block`, unless a
+/// test sets it.
+pub static GRAPHICS_SHAPE: AtomicI32 = AtomicI32::new(0);
 
 // the fake blocks by name, each with its own fake block type, made once per process
 static BLOCKS: OnceLock<Vec<(&'static str, usize)>> = OnceLock::new();
 static GRAPHICS: OnceLock<usize> = OnceLock::new();
+static TYPE_VTABLE: OnceLock<usize> = OnceLock::new();
 static MATRIX: OnceLock<usize> = OnceLock::new();
+static REGION: OnceLock<usize> = OnceLock::new();
+static POLICY: OnceLock<usize> = OnceLock::new();
 // the fake tessellator's own vertex storage: positions, then colours
 static POOL: OnceLock<(usize, usize)> = OnceLock::new();
 
@@ -91,8 +151,16 @@ static POOL: OnceLock<(usize, usize)> = OnceLock::new();
 impl FakeGhost {
     /// The names the fake registry knows; `stratum:exact` is the block an exact NBT lookup gives, and no name lookup
     /// gives it.
-    pub const NAMES: [&'static str; 6] =
-        ["minecraft:air", "minecraft:stone", "minecraft:unknown", "minecraft:grass_block", KNOWN_NAME, "stratum:exact"];
+    pub const NAMES: [&'static str; 8] = [
+        "minecraft:air",
+        "minecraft:stone",
+        "minecraft:unknown",
+        "minecraft:grass_block",
+        KNOWN_NAME,
+        "stratum:exact",
+        "minecraft:water",
+        "minecraft:leaves",
+    ];
 
     /// Calls that point at the fakes below.
     pub fn calls() -> GhostCalls {
@@ -118,7 +186,7 @@ impl FakeGhost {
             transform_wall_connection_types: Self::transform as *const () as usize,
             has_transformable_connection_states: Self::has_none as *const () as usize,
             transform_connection_states: Self::transform as *const () as usize,
-            get_tessellation_policy: 0,
+            get_tessellation_policy: Self::policy_for as *const () as usize,
             block_type_registry: 0x5EED,
             lookup_by_name: Self::lookup_by_name as *const () as usize,
             string_byte_input_vtable: 0x7AB1E,
@@ -134,9 +202,13 @@ impl FakeGhost {
             frame_views: 0x10,
             item_in_hand_renderer_slot: 353,
             blend_material: 0x1D8,
-            render_layer: 0x1A,
+            block_get_render_layer: Self::render_layer_for as *const () as usize,
+            extra_render_layers_slot: EXTRA_LAYERS_SLOT,
             tessellation_policy_get_slot: 2,
             tint_method: TINT_METHOD,
+            get_chunk_slot: GET_CHUNK_SLOT,
+            level_chunk_get_biome: Self::get_biome as *const () as usize,
+            biome_get_water_color: Self::get_water_color as *const () as usize,
             heap_new: Self::heap_new,
             heap_delete: Self::heap_delete,
         }
@@ -152,6 +224,16 @@ impl FakeGhost {
         FakeBuffer::new(size_of::<TessellatorLayout>())
     }
 
+    /// A fake `BlockSource` whose vtable holds `getChunk(int, int)` at `GET_CHUNK_SLOT`.
+    pub fn region() -> usize {
+        *REGION.get_or_init(|| {
+            let mut slots = vec![0usize; GET_CHUNK_SLOT as usize + 1];
+            slots[GET_CHUNK_SLOT as usize] = Self::get_chunk as *const () as usize;
+            let vtable = Box::leak(slots.into_boxed_slice()).as_ptr() as usize;
+            Box::leak(Box::new([vtable, 0usize])).as_ptr() as usize
+        })
+    }
+
     pub fn count(counter: &AtomicU32) -> u32 {
         counter.load(Ordering::SeqCst)
     }
@@ -163,7 +245,16 @@ impl FakeGhost {
             Self::NAMES
                 .iter()
                 .map(|name| {
-                    let block_type = Box::leak(vec![0u64; 0x200 / 8].into_boxed_slice()).as_ptr() as u64;
+                    let mut type_bytes = vec![0u64; 0x200 / 8];
+                    type_bytes[0] = Self::block_type_vtable() as u64;
+                    let tint = match *name {
+                        "minecraft:water" => WATER_TINT,
+                        "minecraft:leaves" => LEAVES_TINT,
+                        _ => 0,
+                    };
+                    // SAFETY: the tint method sits inside the 0x200 zeroed bytes of the fake block type
+                    unsafe { type_bytes.as_mut_ptr().cast::<u8>().add(TINT_METHOD as usize).write(tint) };
+                    let block_type = Box::leak(type_bytes.into_boxed_slice()).as_ptr() as u64;
                     let mut block = vec![0u64; 0x80 / 8];
                     block[0x68 / 8] = block_type;
                     (*name, Box::leak(block.into_boxed_slice()).as_ptr() as usize)
@@ -185,11 +276,7 @@ impl FakeGhost {
 
     /// The fake block graphics every block has.
     pub fn graphics() -> usize {
-        *GRAPHICS.get_or_init(|| {
-            let mut bytes = vec![0u8; 0x40];
-            bytes[0x1A] = RENDER_LAYER;
-            Box::leak(bytes.into_boxed_slice()).as_ptr() as usize
-        })
+        *GRAPHICS.get_or_init(|| Box::leak(vec![0u8; 0x40].into_boxed_slice()).as_ptr() as usize)
     }
 
     fn pool() -> (usize, usize) {
@@ -270,6 +357,13 @@ impl FakeGhost {
         unsafe {
             Self::set_tessellating(this, false);
             let data = Self::data(this);
+            ENDED_COLORS.lock().unwrap().push(data.colors.as_slice().to_vec());
+            ENDED_POSITIONS.lock().unwrap().push(data.positions.as_slice().to_vec());
+            ENDED_EXTRA.lock().unwrap().push((
+                data.normals.as_slice().to_vec(),
+                data.tangents.as_slice().to_vec(),
+                data.texture_uvs[0].as_slice().to_vec(),
+            ));
             Self::release_all(data);
             Self::empty_pool(data);
             out.cast::<u8>().write_bytes(0, size_of::<MeshLayout2651>());
@@ -377,13 +471,16 @@ impl FakeGhost {
 
     // writes the top face of the block at `pos` as one grey quad, as the game appends a block's quads
     unsafe extern "C" fn bt_tessellate(
-        _this: *mut c_void,
+        this: *mut c_void,
         tessellator: *mut c_void,
         _block: *const c_void,
         pos: *const BlockPos,
         _cached: u8,
     ) -> u8 {
         let call = TESSELLATE_CALLS.fetch_add(1, Ordering::SeqCst) + 1;
+        // SAFETY: the wrapper passes its live block tessellator, laid out as the mirror
+        let layer = unsafe { (*this.cast::<BlockTessellatorLayout>()).rendering_layer };
+        TESSELLATED_LAYERS.lock().unwrap_or_else(std::sync::PoisonError::into_inner).push(layer);
         // SAFETY: as in `set_tessellating`
         let tessellating = unsafe { (*tessellator.cast::<TessellatorLayout>()).tessellating };
         assert!(tessellating, "tessellateInWorld ran outside a begin and end");
@@ -397,8 +494,24 @@ impl FakeGhost {
             let data = Self::data(tessellator);
             let [x, y, z] = [pos.x as f32, pos.y as f32 + 1.0, pos.z as f32];
             let quad = [[x, y, z], [x, y, z + 1.0], [x + 1.0, y, z + 1.0], [x + 1.0, y, z]];
-            let written = if failed { 3 } else { 4 };
-            for vertex in quad.into_iter().take(written) {
+            let empty = call > 1 && TESSELLATE_EMPTY.load(Ordering::SeqCst);
+            let written = if empty {
+                0
+            } else if failed {
+                3
+            } else {
+                4
+            };
+            let extra = FILL_EXTRA.load(Ordering::SeqCst);
+            let heap = Self::heap();
+            for (index, vertex) in quad.into_iter().take(written).enumerate() {
+                if extra == EXTRA_FULL || (extra == EXTRA_SHORT && index < 2) {
+                    let _ = GameVec::extend(&heap, &mut data.normals, &[[0.0, 1.0, 0.0, 0.0]]);
+                }
+                if extra == EXTRA_FULL {
+                    let _ = GameVec::extend(&heap, &mut data.tangents, &[[1.0, 0.0, 0.0, 1.0]]);
+                    let _ = GameVec::extend(&heap, &mut data.texture_uvs[0], &[[index as f32 * 0.25, 0.5]]);
+                }
                 let [first, last, end] = data.positions.raw_parts();
                 assert!(last < end, "the fake pool is full");
                 last.write(vertex);
@@ -428,13 +541,80 @@ impl FakeGhost {
         }
     }
 
-    // the world holds air everywhere
-    unsafe extern "C" fn source_get_block(_this: *mut c_void, _pos: *const BlockPos) -> *const c_void {
-        Self::block("minecraft:air") as *const c_void
+    // the world holds air everywhere, except the one block of WORLD_BLOCK_AT
+    unsafe extern "C" fn source_get_block(_this: *mut c_void, pos: *const BlockPos) -> *const c_void {
+        // SAFETY: the wrapper passes a live position
+        let pos = unsafe { *pos };
+        match *WORLD_BLOCK_AT.lock().unwrap() {
+            Some((at, block)) if at == pos => block as *const c_void,
+            _ => Self::block("minecraft:air") as *const c_void,
+        }
+    }
+
+    unsafe extern "C" fn get_chunk(_this: *mut c_void, x: i32, z: i32) -> *mut c_void {
+        CHUNK_QUERIES.lock().unwrap().push((x, z));
+        if CHUNK_NULL.load(Ordering::SeqCst) { std::ptr::null_mut() } else { FAKE_CHUNK as *mut c_void }
+    }
+
+    unsafe extern "C" fn get_biome(chunk: *const c_void, pos: *const u32) -> *const c_void {
+        assert_eq!(chunk as usize, FAKE_CHUNK, "the biome is asked of the chunk getChunk gave");
+        // SAFETY: the wrapper passes a live four-byte ChunkBlockPos
+        BIOME_QUERIES.lock().unwrap().push(unsafe { pos.read() });
+        if BIOME_NULL.load(Ordering::SeqCst) { std::ptr::null() } else { FAKE_BIOME as *const c_void }
+    }
+
+    unsafe extern "C" fn get_water_color(biome: *const c_void, _pos: *const BlockPos) -> u32 {
+        assert_eq!(biome as usize, FAKE_BIOME, "the colour is asked of the biome getBiome gave");
+        WATER_COLOR_CALLS.fetch_add(1, Ordering::SeqCst);
+        WATER_ARGB.load(Ordering::SeqCst)
+    }
+
+    // the one fake policy, whose vtable holds `get` at slot 2
+    unsafe extern "C" fn policy_for(_method: u8) -> *const c_void {
+        *POLICY.get_or_init(|| {
+            let mut slots = vec![0usize; 3];
+            slots[2] = Self::policy_get as *const () as usize;
+            let vtable = Box::leak(slots.into_boxed_slice()).as_ptr() as usize;
+            Box::leak(Box::new([vtable, 0usize])).as_ptr() as usize
+        }) as *const c_void
+    }
+
+    unsafe extern "C" fn policy_get(
+        _this: *const c_void,
+        out: *mut [f32; 4],
+        _block: *const c_void,
+        _region: *mut c_void,
+        _pos: *const BlockPos,
+        _cache: *const c_void,
+    ) -> *mut [f32; 4] {
+        POLICY_CALLS.fetch_add(1, Ordering::SeqCst);
+        // SAFETY: the wrapper passes a 16-byte result buffer
+        unsafe { out.write(*POLICY_COLOUR.lock().unwrap()) };
+        out
     }
 
     unsafe extern "C" fn graphics_for(_block: *const c_void) -> *const c_void {
+        // SAFETY: the shape sits at +0x10, inside the 0x40 zeroed bytes of the fake graphics
+        unsafe { (Self::graphics() as *mut u8).add(0x10).cast::<i32>().write(GRAPHICS_SHAPE.load(Ordering::SeqCst)) };
         Self::graphics() as *const c_void
+    }
+
+    unsafe extern "C" fn render_layer_for(_block: *const c_void) -> u8 {
+        RENDER_LAYER_CALLS.fetch_add(1, Ordering::SeqCst);
+        RENDER_LAYER
+    }
+
+    unsafe extern "C" fn extra_layers_for(_block_type: *const c_void) -> u32 {
+        EXTRA_LAYER_MASK.load(Ordering::SeqCst)
+    }
+
+    // the vtable every fake block type points at: only the getExtraRenderLayers slot holds a function
+    fn block_type_vtable() -> usize {
+        *TYPE_VTABLE.get_or_init(|| {
+            let mut slots = vec![0usize; EXTRA_LAYERS_SLOT as usize + 1];
+            slots[EXTRA_LAYERS_SLOT as usize] = Self::extra_layers_for as *const () as usize;
+            Box::leak(slots.into_boxed_slice()).as_ptr() as usize
+        })
     }
 
     unsafe extern "C" fn transform(block: *const c_void, _rotation: u8, _mirror: u8) -> *const c_void {
@@ -495,7 +675,13 @@ impl FakeGhost {
     unsafe extern "C" fn try_get_block(out: *mut [u64; 2], tag: *const c_void, _cache: *mut c_void) -> *mut [u64; 2] {
         assert!(!tag.is_null());
         let state = NBT_STATE.load(Ordering::SeqCst);
-        let block = if state == 2 { Self::known_block() as u64 } else { 0 };
+        let block = match state {
+            2 => match *EXACT_AS.lock().unwrap() {
+                Some(name) => Self::block(name) as u64,
+                None => Self::known_block() as u64,
+            },
+            _ => 0,
+        };
         let first = u64::from(NBT_STATE_HIGH.load(Ordering::SeqCst)) << 32 | u64::from(state);
         // SAFETY: `out` is the 16-byte pair the wrapper passes
         unsafe { out.write([first, block]) };

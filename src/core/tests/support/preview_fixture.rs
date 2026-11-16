@@ -18,6 +18,7 @@ impl PreviewFixture {
             palette: vec![block],
             primary: BlockLayer::new(cells),
             secondary: SparseLayer::default(),
+            block_entities: Default::default(),
         }
     }
 
@@ -57,6 +58,7 @@ impl PreviewFixture {
             palette,
             primary: BlockLayer::new(cells),
             secondary: SparseLayer::default(),
+            block_entities: Default::default(),
         }
     }
 

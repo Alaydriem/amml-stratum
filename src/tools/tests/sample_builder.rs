@@ -136,6 +136,24 @@ fn the_target_at_the_default_config_is_not_cut() {
 }
 
 #[test]
+fn render_check_sample_heads_every_row_with_stone_and_keeps_the_gaps_empty() {
+    let check = StructureParser::parse(&SampleBuilder::render_check().unwrap()).unwrap();
+    let name = |x, z| check.block_at(x, 0, z).map(|block| block.name.as_str());
+    for row in 0..7 {
+        assert_eq!(name(0, row * 3), Some("minecraft:stone"), "row {row}");
+    }
+    assert_eq!(name(3, 0), Some("minecraft:honey_block"));
+    assert_eq!(name(3, 3), Some("minecraft:chest"));
+    assert_eq!(name(3, 18), Some("minecraft:oak_leaves"));
+    assert_eq!(name(33, 18), Some("minecraft:azalea_leaves_flowered"));
+    assert_eq!(name(42, 18), Some("minecraft:yellow_poplar_leaves"));
+    // a row shorter than the widest ends early
+    assert_eq!(name(36, 15), None);
+    assert_eq!(name(1, 0), None);
+    assert_eq!(name(0, 1), None);
+}
+
+#[test]
 fn tint_sample_holds_every_leaves_block_and_plants_on_grass() {
     let tint = StructureParser::parse(&SampleBuilder::tint().unwrap()).unwrap();
     let names: Vec<&str> = tint.palette.iter().map(|block| block.name.as_str()).collect();

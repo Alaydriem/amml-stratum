@@ -1,4 +1,6 @@
-use stratum_core::structs::ghost::{GhostDraw, GhostJob};
+use std::sync::Arc;
+
+use stratum_core::structs::ghost::{GhostBlockEntityTable, GhostDraw, GhostJob};
 
 use super::GhostOutbox;
 
@@ -25,6 +27,7 @@ pub struct GhostTake {
     has_palette: bool,
     palette_bytes: Vec<u8>,
     palette_ends: Vec<usize>,
+    block_entities: Option<Arc<GhostBlockEntityTable>>,
 }
 
 impl GhostTake {
@@ -44,6 +47,7 @@ impl GhostTake {
             has_palette: false,
             palette_bytes: Vec::new(),
             palette_ends: Vec::new(),
+            block_entities: None,
         }
     }
 
@@ -60,6 +64,7 @@ impl GhostTake {
         self.draws.extend_from_slice(outbox.draws());
         self.has_palette =
             outbox.hand_over(&mut self.jobs, &mut self.frees, &mut self.palette_bytes, &mut self.palette_ends);
+        self.block_entities = outbox.take_block_entities();
         self.fresh_jobs = true;
     }
 
@@ -69,6 +74,7 @@ impl GhostTake {
         self.fresh_jobs = false;
         self.frees.clear();
         self.has_palette = false;
+        self.block_entities = None;
     }
 
     pub fn generation(&self) -> u64 {
@@ -112,6 +118,16 @@ impl GhostTake {
 
     pub fn frees(&self) -> &[u32] {
         &self.frees
+    }
+
+    // The block entity NBT of the build when the palette changed in this take.
+    pub fn block_entities(&self) -> Option<&GhostBlockEntityTable> {
+        self.block_entities.as_deref()
+    }
+
+    // The same table as `block_entities`, as a use the render side keeps until the next palette.
+    pub fn shared_block_entities(&self) -> Option<Arc<GhostBlockEntityTable>> {
+        self.block_entities.clone()
     }
 
     // The NBT bytes of each palette entry when the palette changed in this take.

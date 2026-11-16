@@ -1,14 +1,18 @@
-use stratum_core::structs::ghost::{GhostDraw, GhostFrame, GhostJob};
+use std::sync::Arc;
+
+use stratum_core::structs::ghost::{GhostBlockEntityTable, GhostDraw, GhostFrame, GhostJob};
 use stratum_core::structs::marker::Rotation;
 
 // The ghost frames the tick published since the render thread last took one, folded into one. A frame that is not
 // taken before the next publish latches: `clear_all` is OR'd, the newest palette is kept, and frees and jobs add
 // up, except that a latched job is dropped when its slot is freed or given a new job later, or by any `clear_all`.
+// A new palette empties the block entity lists of the jobs latched before it, since their entry ids name the old table.
 // Draws, opacity, rotation, generation and world epoch are always the newest.
 //
 // Bound: `jobs` and `frees` hold at most one entry per slot, so at most `slot_capacity` entries each; an entry for a
 // slot past the capacity is left out. `latest` and `freed` hold one mark per slot, sized when the capacity changes.
-// `spare` keeps at most `slot_capacity` jobs for their cell buffers. The palette is bounded by core's palette limit.
+// `spare` keeps at most `slot_capacity` jobs for their cell buffers. The palette is bounded by core's palette limit and
+// the block entity table by `GhostBlockEntityTable::MAX_ENTRIES`; a job's block entity list by its cells.
 pub struct GhostOutbox {
     // A publish arrived that the render thread has not taken.
     pending: bool,
@@ -25,6 +29,8 @@ pub struct GhostOutbox {
     // The palette entries' NBT bytes end to end, and where each entry ends.
     palette_bytes: Vec<u8>,
     palette_ends: Vec<usize>,
+    // The newest block entity table, latched with the palette.
+    block_entities: Option<Arc<GhostBlockEntityTable>>,
     opacity: f32,
     rotation: Rotation,
     spare: Vec<GhostJob>,
@@ -49,6 +55,7 @@ impl GhostOutbox {
             has_palette: false,
             palette_bytes: Vec::new(),
             palette_ends: Vec::new(),
+            block_entities: None,
             opacity: 1.0,
             rotation: Rotation::R0,
             spare: Vec::new(),
@@ -75,6 +82,7 @@ impl GhostOutbox {
         if !self.pending {
             self.clear_all = false;
             self.has_palette = false;
+            self.block_entities = None;
             self.recycle_all();
             self.clear_frees();
         }
@@ -101,6 +109,12 @@ impl GhostOutbox {
                 self.frees.push(*slot);
             }
         }
+        // the entry ids of a latched job's block entities name the table a new palette replaces
+        if frame.palette.is_some() {
+            for (_, job) in &mut self.jobs {
+                job.block_entities.clear();
+            }
+        }
         for job in &frame.jobs {
             let index = job.slot as usize;
             if index >= self.latest.len() {
@@ -114,6 +128,7 @@ impl GhostOutbox {
         self.drop_superseded();
         if let Some(palette) = &frame.palette {
             self.write_palette(palette.entries.len(), |id, out| palette.entry_nbt(id, out).is_ok());
+            self.block_entities = frame.block_entities.clone();
         }
     }
 
@@ -145,6 +160,11 @@ impl GhostOutbox {
         }
         self.pending = false;
         has_palette
+    }
+
+    // Hands out the table that came with the palette, once.
+    pub fn take_block_entities(&mut self) -> Option<Arc<GhostBlockEntityTable>> {
+        self.block_entities.take()
     }
 
     pub fn generation(&self) -> u64 {

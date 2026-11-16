@@ -1,4 +1,4 @@
-use super::{BlockLayer, BlockState, SparseLayer, StructureSize};
+use super::{BlockEntities, BlockLayer, BlockState, SparseLayer, StructureSize};
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Structure {
@@ -9,6 +9,8 @@ pub struct Structure {
     pub primary: BlockLayer,
     // Second block layer, usually waterlogged liquids. Only cells that hold a block are kept.
     pub secondary: SparseLayer,
+    // NBT of the cells that hold a block entity.
+    pub block_entities: BlockEntities,
 }
 
 impl Structure {

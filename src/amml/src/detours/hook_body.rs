@@ -36,6 +36,24 @@ impl HookBody {
         original()
     }
 
+    /// Runs `body` on a copy of `args` and keeps the copy when `body` returns, then always calls `original` with
+    /// `args`. A panic in `body` leaves `args` as they were, so a half change is never forwarded.
+    pub fn on_copy<A: Copy, R>(
+        args: &mut A,
+        latch: &StopLatch,
+        body: impl FnOnce(&mut A),
+        original: impl FnOnce(&A) -> R,
+    ) -> R {
+        if !latch.raised() && !ModRuntime::is_disabled() {
+            let mut copy = *args;
+            match catch_unwind(AssertUnwindSafe(|| body(&mut copy))) {
+                Ok(()) => *args = copy,
+                Err(payload) => Self::panicked(latch, payload.as_ref()),
+            }
+        }
+        original(args)
+    }
+
     fn panicked(latch: &StopLatch, payload: &(dyn std::any::Any + Send)) {
         latch.raise();
         if let Some(runtime) = ModRuntime::get() {

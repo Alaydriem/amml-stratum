@@ -1,6 +1,7 @@
 use std::ffi::c_void;
 
 use crate::game::{BlockCalls, BlockRegistry, NbtBlock};
+use crate::ghost::{DoubleSided, LayerPasses};
 use crate::types::{GhostCalls, NbtLookup};
 
 /// Turns the ghost palette into the game's blocks for one world, because a `Block` pointer is valid only in the
@@ -14,7 +15,8 @@ pub struct BlockResolver {
     game: BlockCalls,
     blocks: Vec<*const c_void>,
     graphics: Vec<*const c_void>,
-    layers: Vec<i32>,
+    passes: Vec<LayerPasses>,
+    double_sided: Vec<bool>,
     air: *const c_void,
     air_graphics: *const c_void,
     stone: *const c_void,
@@ -34,7 +36,8 @@ impl BlockResolver {
             game: BlockCalls::new(calls),
             blocks: Vec::new(),
             graphics: Vec::new(),
-            layers: Vec::new(),
+            passes: Vec::new(),
+            double_sided: Vec::new(),
             air: std::ptr::null(),
             air_graphics: std::ptr::null(),
             stone: std::ptr::null(),
@@ -66,7 +69,8 @@ impl BlockResolver {
     pub fn leave(&mut self) {
         self.blocks.clear();
         self.graphics.clear();
-        self.layers.clear();
+        self.passes.clear();
+        self.double_sided.clear();
         self.air = std::ptr::null();
         self.air_graphics = std::ptr::null();
         self.stone = std::ptr::null();
@@ -80,18 +84,26 @@ impl BlockResolver {
     pub fn resolve<'a>(&mut self, entries: impl Iterator<Item = &'a [u8]>, rotation: u8) {
         self.blocks.clear();
         self.graphics.clear();
-        self.layers.clear();
+        self.passes.clear();
+        self.double_sided.clear();
         for entry in entries {
             let found = self.lookup(entry);
             let block = self.turn(found, rotation);
-            // SAFETY: a block the game gave for this world, or null, and the graphics it gave for that block
-            let (graphics, layer) = unsafe {
+            // SAFETY: a block the game gave for this world, or null, and the block type it gave for that block
+            let (graphics, passes, double_sided) = unsafe {
+                let passes = if block.is_null() {
+                    LayerPasses::default()
+                } else {
+                    let extra = self.game.extra_render_layers(self.game.block_type(block));
+                    LayerPasses::new(self.game.render_layer(block), extra)
+                };
                 let graphics = self.game.graphics(block);
-                (graphics, self.game.render_layer(graphics))
+                (graphics, passes, DoubleSided::shape(self.game.block_shape(graphics)))
             };
             self.blocks.push(block);
             self.graphics.push(graphics);
-            self.layers.push(layer);
+            self.passes.push(passes);
+            self.double_sided.push(double_sided);
         }
     }
 
@@ -109,9 +121,14 @@ impl BlockResolver {
         self.graphics.get(usize::from(id)).copied().unwrap_or(std::ptr::null())
     }
 
-    /// The render layer of palette id `id`; 0 where `block` is null.
-    pub fn layer(&self, id: u16) -> i32 {
-        self.layers.get(usize::from(id)).copied().unwrap_or(0)
+    /// The render layers palette id `id` is tessellated in; the default, one pass on layer 0, where `block` is null.
+    pub fn passes(&self, id: u16) -> LayerPasses {
+        self.passes.get(usize::from(id)).copied().unwrap_or_default()
+    }
+
+    /// Whether palette id `id` is a one-quad shape the ghost draws from both sides; false where `block` is null.
+    pub fn double_sided(&self, id: u16) -> bool {
+        self.double_sided.get(usize::from(id)).copied().unwrap_or(false)
     }
 
     pub fn air(&self) -> *const c_void {

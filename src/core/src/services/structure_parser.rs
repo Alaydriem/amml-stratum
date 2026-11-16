@@ -4,10 +4,10 @@ use std::io::Read;
 use flate2::read::ZlibDecoder;
 
 use crate::errors::StructureError;
-use crate::services::NbtReader;
+use crate::services::{NbtReader, NbtWriter};
 use crate::structs::nbt::{NbtCompound, NbtLimits, NbtTag};
 use crate::structs::structure::{
-    BlockLayer, BlockState, BlockStates, SparseLayer, StateValue, Structure, StructureSize,
+    BlockEntities, BlockLayer, BlockState, BlockStates, SparseLayer, StateValue, Structure, StructureSize,
 };
 
 // Turns `.mcstructure` bytes into a `Structure`.
@@ -69,7 +69,29 @@ impl StructureParser {
             None => SparseLayer::new(Vec::new(), Vec::new()),
         };
 
-        Ok(Structure { size, world_origin, palette, primary, secondary })
+        let block_entities = Self::read_block_entities(structure, volume)?;
+        Ok(Structure { size, world_origin, palette, primary, secondary, block_entities })
+    }
+
+    // Reads `block_position_data`: each key is a decimal cell index inside the volume and each value holds
+    // `block_entity_data`, kept as a named-root compound. Other keys and entries are skipped.
+    fn read_block_entities(structure: &NbtCompound, volume: u64) -> Result<BlockEntities, StructureError> {
+        let mut found = BlockEntities::new();
+        let Some(NbtTag::Compound(palette)) = structure.get("palette") else { return Ok(found) };
+        let Some(NbtTag::Compound(default)) = palette.get("default") else { return Ok(found) };
+        let Some(NbtTag::Compound(positions)) = default.get("block_position_data") else { return Ok(found) };
+        for (key, tag) in positions.iter() {
+            let Ok(cell) = key.parse::<u32>() else { continue };
+            if u64::from(cell) >= volume {
+                continue;
+            }
+            let NbtTag::Compound(position) = tag else { continue };
+            let Some(NbtTag::Compound(data)) = position.get("block_entity_data") else { continue };
+            let entries: Vec<(&str, NbtTag)> = data.iter().map(|(name, tag)| (name, tag.clone())).collect();
+            let Ok(bytes) = NbtWriter::compound("", &entries) else { continue };
+            found.insert(cell, bytes);
+        }
+        Ok(found)
     }
 
     // `compression` absent or 0: the structure is a plain compound. 1: zlib data in a Byte Array.

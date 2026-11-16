@@ -1,7 +1,9 @@
-use super::SectionScan;
+use super::{BlockEntityNames, ChestPairer, SectionScan, SkullPoser};
 use crate::structs::ghost::{
-    GhostBuild, GhostDraw, GhostJob, GhostJobMode, GhostPalette, GhostView, SectionKey, SectionPart,
+    ChestRole, GhostBlockEntity, GhostBuild, GhostDraw, GhostJob, GhostJobMode, GhostPalette, GhostView, SectionKey,
+    SectionPart,
 };
+use crate::structs::structure::{BlockState, StateValue};
 
 // Cuts a ghost build into section keys and fills the padded cell grids the mesh jobs read.
 pub struct GhostSections;
@@ -117,6 +119,7 @@ impl GhostSections {
         job.group_serial = 0;
         job.group_index = 0;
         job.group_offset = [0; 3];
+        job.block_entities.clear();
         if key.part == SectionPart::Marker {
             job.key = key;
             job.skip_matching = false;
@@ -145,6 +148,8 @@ impl GhostSections {
         job.cells.resize(padded[0] * padded[1] * padded[2], GhostPalette::NONE);
 
         let mut index = 0;
+        // The last palette id checked for a block actor, and the answer.
+        let mut actor_checked = (GhostPalette::NONE, false);
         for py in 0..padded[1] {
             let row_drawn = key.layer.is_none() || py == 1;
             let wy = origin[1] + py as i32 - 1;
@@ -157,6 +162,18 @@ impl GhostSections {
                         && let Some(id) = build.block_at([wx, wy, wz])
                     {
                         job.cells[index] = id;
+                        if id != actor_checked.0 {
+                            actor_checked = (id, Self::is_block_actor(build, id));
+                        }
+                        let interior = (1..=dims[0] as usize).contains(&px)
+                            && (1..=dims[1] as usize).contains(&py)
+                            && (1..=dims[2] as usize).contains(&pz);
+                        if interior
+                            && actor_checked.1
+                            && let Some(entity) = Self::block_entity(build, [wx, wy, wz], index, id)
+                        {
+                            job.block_entities.push(entity);
+                        }
                     }
                     index += 1;
                 }
@@ -169,6 +186,7 @@ impl GhostSections {
     // the scheduler's to set.
     pub fn fill_member_job(build: &GhostBuild, member: SectionKey, job: &mut GhostJob) {
         Self::fill_job(build, member, job);
+        job.block_entities.clear();
         job.mode = GhostJobMode::Append;
         job.skip_matching = false;
         job.group_offset = [0, 1, 2].map(|axis| job.origin[axis] - build.world_min[axis]);
@@ -188,6 +206,51 @@ impl GhostSections {
         job.dims = [0; 3];
         job.slot_size = Self::build_size(build);
         job.cells.clear();
+        job.block_entities.clear();
+    }
+
+    // True when the palette block `id` is drawn with a block actor. A bed's foot half is not: only
+    // the head half carries the model.
+    fn is_block_actor(build: &GhostBuild, id: u16) -> bool {
+        let Some(block) = build.palette.entries.get(usize::from(id)) else {
+            return false;
+        };
+        BlockEntityNames::has_block_actor(&block.name) && !Self::is_bed_foot(block)
+    }
+
+    fn is_bed_foot(block: &BlockState) -> bool {
+        block.name == "minecraft:bed"
+            && matches!(block.states.get("head_piece_bit"), Some(StateValue::Bool(false) | StateValue::Int(0)))
+    }
+
+    // The block actor entry of the world cell, `index` being its place in the padded grid and `id` its palette
+    // block. None for the other half of a double chest, which draws nothing.
+    fn block_entity(build: &GhostBuild, world: [i32; 3], index: usize, id: u16) -> Option<GhostBlockEntity> {
+        let cell = index as u32;
+        let located = build.locate(world);
+        let entry =
+            located.and_then(|(piece, local)| build.block_entity_id(piece, local)).unwrap_or(GhostBlockEntity::NONE);
+        let block = build.palette.entries.get(usize::from(id))?;
+        let mut chest = None;
+        if BlockEntityNames::is_chest(&block.name) {
+            match ChestPairer::pair(build, world) {
+                ChestRole::Follower => return None,
+                ChestRole::Lead(direction) => chest = Some(direction),
+                ChestRole::Single => {}
+            }
+        }
+        let skull = BlockEntityNames::is_skull(&block.name).then(|| {
+            let nbt = located.and_then(|(piece, local)| Self::nbt_at(build, piece, local));
+            SkullPoser::pose(block, nbt, build.rotation)
+        });
+        Some(GhostBlockEntity::new(cell, entry, chest, skull))
+    }
+
+    // The source NBT of the cell at `local` of piece `piece`.
+    fn nbt_at(build: &GhostBuild, piece: usize, local: [u32; 3]) -> Option<&[u8]> {
+        let structure = &build.pieces[piece].structure;
+        let at = structure.index_of(local[0], local[1], local[2]) as u32;
+        structure.block_entities.entry(structure.block_entities.entry_of(at)?)
     }
 
     // The build's size in blocks.

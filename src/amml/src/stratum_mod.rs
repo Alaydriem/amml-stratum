@@ -7,12 +7,12 @@ use amml_sdk::{AmmlMod, Api, HookHandle, ModDirs, SdkError};
 
 use crate::detours::{
     build_action, build_block, client_update, container_close, container_open, db_storage_ctor, db_storage_shutdown,
-    focus_lost, hud_tick, render_level, screen_gone, stack_response,
+    focus_lost, hud_tick, render_block_entities, render_level, render_skull, screen_gone, stack_response,
 };
 use crate::errors::GameLayoutError;
 use crate::game::ClientLevel;
 use crate::services::{LegacyFolders, StratumRuntime};
-use crate::types::{GhostCalls, PacketCalls, PlayerCalls, StratumEntry, StratumFeature, UseCalls};
+use crate::types::{BlockActorCalls, GhostCalls, PacketCalls, PlayerCalls, StratumEntry, StratumFeature, UseCalls};
 
 // the AMML entry point: load notes the folders and installs the runtime; enable resolves the entries, copies the old
 // LeviLamina folders once, starts the core and installs the hooks; disable removes the hooks, closes the picker and
@@ -122,7 +122,31 @@ impl StratumMod {
         let render = get(StratumEntry::LEVEL_RENDERER_RENDER_LEVEL)?;
         let detour = render_level::detour as *const c_void;
         Self::hook(api, runtime, render, detour, read, render_level::GUARD.original())?;
+        Self::install_block_entity_hook(api, runtime, entries);
         Self::install_easy_place_hooks(api, runtime, entries)
+    }
+
+    // the block-entity pass body every camera shares, while the block-entity feature is on; it only draws after the
+    // game, so it reads after the writers. A failure to install it turns the feature off. Then, while the skulls are
+    // on, the skull draw, which swaps a skull ghost's pose into the game's arguments, so it is a writer; a failure to
+    // install it leaves the skull ghosts undrawn and every other block entity as it is
+    fn install_block_entity_hook(api: &Api, runtime: &StratumRuntime, entries: &GameEntries) {
+        let Some(calls) = BlockActorCalls::new(entries, StratumRuntime::heap_delete) else { return };
+        let detour = render_block_entities::detour as *const c_void;
+        let target = calls.render_block_entities_body as u64;
+        let original = render_block_entities::GUARD.original();
+        if let Err(error) = Self::hook(api, runtime, target, detour, HookOrder::READ_AFTER_WRITERS, original) {
+            let line = format!("{} is off (the block entity hook: {error})", StratumFeature::BLOCK_ACTORS);
+            api.log(&Self::id(), AmmlLogLevel::WARN, &line);
+            return;
+        }
+        let Some(skulls) = calls.skull else { return };
+        let skull = render_skull::detour as *const c_void;
+        let original = render_skull::GUARD.original();
+        if let Err(error) = Self::hook(api, runtime, skulls.render_skull as u64, skull, HookOrder::WRITE, original) {
+            let line = format!("{} is off (the skull hook: {error})", StratumFeature::SKULLS);
+            api.log(&Self::id(), AmmlLogLevel::WARN, &line);
+        }
     }
 
     // the code pointer in `slot` of the vtable at `table`, an .rdata table that holds the slot

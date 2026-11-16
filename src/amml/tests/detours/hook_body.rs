@@ -63,3 +63,28 @@ fn before_runs_the_body_then_the_original() {
 
     assert_eq!(*order.borrow(), vec!["body", "original"]);
 }
+
+#[test]
+fn a_body_on_a_copy_gives_the_original_the_copy_or_the_untouched_arguments() {
+    let latch = StopLatch::new();
+    let mut args = [1u8, 2];
+
+    let seen = HookBody::on_copy(&mut args, &latch, |copy| copy[0] = 9, |given| *given);
+    assert_eq!((seen, args), ([9, 2], [9, 2]), "a body that returns keeps its copy");
+
+    let mut args = [1u8, 2];
+    let seen = HookBody::on_copy(
+        &mut args,
+        &latch,
+        |copy| {
+            copy[1] = 7;
+            panic!("half way");
+        },
+        |given| *given,
+    );
+    assert_eq!((seen, args), ([1, 2], [1, 2]), "a panic forwards the arguments as given");
+    assert!(latch.raised());
+
+    let seen = HookBody::on_copy(&mut args, &latch, |copy| copy[0] = 5, |given| *given);
+    assert_eq!(seen, [1, 2], "a raised latch does not run the body");
+}

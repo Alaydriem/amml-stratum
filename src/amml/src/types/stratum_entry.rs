@@ -47,7 +47,8 @@ impl StratumEntry {
         EntryId::new("BlockSerializationUtils.tryGetBlockFromNBT");
     pub const COMPOUND_TAG_DTOR: EntryId = EntryId::new("CompoundTag.dtor");
     pub const BLOCK_GRAPHICS_GET_FOR_BLOCK: EntryId = EntryId::new("BlockGraphics.getForBlock");
-    pub const BLOCK_GRAPHICS_RENDER_LAYER: EntryId = EntryId::new("BlockGraphics.mRenderLayer");
+    pub const BLOCK_GET_RENDER_LAYER: EntryId = EntryId::new("Block.getRenderLayer");
+    pub const BLOCK_TYPE_GET_EXTRA_RENDER_LAYERS: EntryId = EntryId::new("BlockType.getExtraRenderLayers");
     pub const TRANSFORM_BLOCK: EntryId = EntryId::new("VanillaBlockStateTransformUtils.transformBlock");
     pub const HAS_TRANSFORMABLE_WALL_STATES: EntryId =
         EntryId::new("VanillaBlockStateTransformUtils.hasTransformableWallStates");
@@ -62,6 +63,10 @@ impl StratumEntry {
         EntryId::new("BiomeColorSampling.getTessellationPolicy");
     pub const TESSELLATION_POLICY_GET: EntryId = EntryId::new("TessellationPolicy.get");
     pub const BLOCK_TYPE_TINT_METHOD: EntryId = EntryId::new("BlockType.mTintMethod");
+    // the water tint: the chunk of a position, its biome, and the biome's water colour
+    pub const BLOCK_SOURCE_GET_CHUNK: EntryId = EntryId::new("BlockSource.getChunk");
+    pub const LEVEL_CHUNK_GET_BIOME: EntryId = EntryId::new("LevelChunk.getBiome");
+    pub const BIOME_COLOR_SAMPLING_GET_WATER_COLOR: EntryId = EntryId::new("BiomeColorSampling.getWaterColor");
 
     pub const CLIENT_INSTANCE_GET_LEVEL: EntryId = EntryId::new("ClientInstance.getLevel");
     pub const CLIENT_INSTANCE_IS_IN_REALM: EntryId = EntryId::new("ClientInstance.isInRealm");
@@ -147,6 +152,36 @@ impl StratumEntry {
     pub const READ_ONLY_BINARY_STREAM_VTABLE: EntryId = EntryId::new("ReadOnlyBinaryStream.vtable");
     pub const READ_ONLY_BINARY_STREAM_DTOR: EntryId = EntryId::new("ReadOnlyBinaryStream.dtor");
 
+    // block-entity ghosts: the draw hook body every camera shares and the player renderer's table that filters it
+    pub const LEVEL_RENDERER_CAMERA_RENDER_BLOCK_ENTITIES_BODY: EntryId =
+        EntryId::new("LevelRendererCamera.renderBlockEntitiesBody");
+    pub const LEVEL_RENDERER_PLAYER_VTABLE: EntryId = EntryId::new("LevelRendererPlayer.vtable");
+    // block-entity ghosts: the dispatcher draw with a render position, and where the render context keeps the
+    // dispatcher and the camera target
+    pub const BLOCK_ACTOR_RENDER_DISPATCHER_RENDER: EntryId = EntryId::new("BlockActorRenderDispatcher.render");
+    pub const BASE_ACTOR_RENDER_CONTEXT_BLOCK_ENTITY_RENDER_DISPATCHER: EntryId =
+        EntryId::new("BaseActorRenderContext.mBlockEntityRenderDispatcher");
+    pub const BASE_ACTOR_RENDER_CONTEXT_IMPL: EntryId = EntryId::new("BaseActorRenderContext.mImpl");
+    pub const BASE_ACTOR_RENDER_CONTEXT_IMPL_CAMERA_TARGET_POSITION: EntryId =
+        EntryId::new("BaseActorRenderContext.Impl.mCameraTargetPosition");
+    // block-entity ghosts: the actor make, load and render component
+    pub const VANILLA_BLOCK_ACTOR_FACTORY_CREATE_BLOCK_ACTOR: EntryId =
+        EntryId::new("VanillaBlockActorFactory.createBlockActor");
+    pub const BLOCK_ACTOR_LOAD_STATIC: EntryId = EntryId::new("BlockActor.loadStatic");
+    pub const BLOCK_ACTOR_GET_RENDER_COMPONENT: EntryId = EntryId::new("BlockActor._getRenderComponent");
+    pub const DEFAULT_DATA_LOAD_HELPER_VTABLE: EntryId = EntryId::new("DefaultDataLoadHelper.vtable");
+    // block-entity ghosts: the actor's position and the chest fields that make the lead of a pair a large chest
+    pub const BLOCK_ACTOR_POSITION: EntryId = EntryId::new("BlockActor.mPosition");
+    pub const BLOCK_ACTOR_IS_TYPE: EntryId = EntryId::new("BlockActor.isType");
+    pub const CHEST_BLOCK_ACTOR_PAIR_FLAGS: EntryId = EntryId::new("ChestBlockActor.mPairFlags");
+    pub const CHEST_BLOCK_ACTOR_LARGE_CHEST_PAIRED: EntryId = EntryId::new("ChestBlockActor.mLargeChestPaired");
+    pub const CHEST_BLOCK_ACTOR_LARGE_CHEST_PAIRED_POSITION: EntryId =
+        EntryId::new("ChestBlockActor.mLargeChestPairedPosition");
+    // block-entity ghosts: the skull draw the skull hook swaps a ghost's pose into, and the block type's full name
+    // that picks the skull model
+    pub const SKULL_BLOCK_RENDERER_RENDER_SKULL: EntryId = EntryId::new("SkullBlockRenderer.renderSkull");
+    pub const BLOCK_TYPE_FULL_NAME: EntryId = EntryId::new("BlockType.mNameInfo.mFullName");
+
     // where the registry object sits in the BlockTypeRegistry.instance global
     pub const REGISTRY_IN_OWNER: u64 = 0x18;
 
@@ -228,7 +263,7 @@ impl StratumEntry {
     ];
 
     // the palette lookups, the block turn and the tint
-    pub const PALETTE: [EntryId; 17] = [
+    pub const PALETTE: [EntryId; 18] = [
         Self::BLOCK_TYPE_REGISTRY_INSTANCE,
         Self::BLOCK_TYPE_REGISTRY_LOOKUP_BY_NAME,
         Self::STRING_BYTE_INPUT_VTABLE,
@@ -236,7 +271,8 @@ impl StratumEntry {
         Self::BLOCK_SERIALIZATION_UTILS_TRY_GET_BLOCK_FROM_NBT,
         Self::COMPOUND_TAG_DTOR,
         Self::BLOCK_GRAPHICS_GET_FOR_BLOCK,
-        Self::BLOCK_GRAPHICS_RENDER_LAYER,
+        Self::BLOCK_GET_RENDER_LAYER,
+        Self::BLOCK_TYPE_GET_EXTRA_RENDER_LAYERS,
         Self::TRANSFORM_BLOCK,
         Self::HAS_TRANSFORMABLE_WALL_STATES,
         Self::TRANSFORM_WALL_CONNECTION_TYPES,
@@ -248,6 +284,10 @@ impl StratumEntry {
         Self::BLOCK_TYPE_TINT_METHOD,
     ];
 
+    // the water tint: the optional feature `stratum.water_tint`
+    pub const WATER_TINT: [EntryId; 3] =
+        [Self::BLOCK_SOURCE_GET_CHUNK, Self::LEVEL_CHUNK_GET_BIOME, Self::BIOME_COLOR_SAMPLING_GET_WATER_COLOR];
+
     // the block listener that tells core which blocks of the client region changed
     pub const BLOCK_CHANGES: [EntryId; 5] = [
         Self::BLOCK_SOURCE_LISTENER_VTABLE,
@@ -256,6 +296,33 @@ impl StratumEntry {
         Self::BLOCK_SOURCE_ADD_LISTENER,
         Self::BLOCK_SOURCE_REMOVE_LISTENER,
     ];
+
+    // the block-entity ghosts: the optional feature `stratum.block_actors`. The level the loads take comes from
+    // `ClientInstance.getLevel`, which the world key already asks for
+    pub const BLOCK_ACTORS: [EntryId; 10] = [
+        Self::LEVEL_RENDERER_CAMERA_RENDER_BLOCK_ENTITIES_BODY,
+        Self::LEVEL_RENDERER_PLAYER_VTABLE,
+        Self::BLOCK_ACTOR_RENDER_DISPATCHER_RENDER,
+        Self::BASE_ACTOR_RENDER_CONTEXT_BLOCK_ENTITY_RENDER_DISPATCHER,
+        Self::BASE_ACTOR_RENDER_CONTEXT_IMPL,
+        Self::BASE_ACTOR_RENDER_CONTEXT_IMPL_CAMERA_TARGET_POSITION,
+        Self::VANILLA_BLOCK_ACTOR_FACTORY_CREATE_BLOCK_ACTOR,
+        Self::BLOCK_ACTOR_LOAD_STATIC,
+        Self::BLOCK_ACTOR_GET_RENDER_COMPONENT,
+        Self::DEFAULT_DATA_LOAD_HELPER_VTABLE,
+    ];
+
+    // the large chests: the optional feature `stratum.large_chests`
+    pub const LARGE_CHESTS: [EntryId; 5] = [
+        Self::BLOCK_ACTOR_POSITION,
+        Self::BLOCK_ACTOR_IS_TYPE,
+        Self::CHEST_BLOCK_ACTOR_PAIR_FLAGS,
+        Self::CHEST_BLOCK_ACTOR_LARGE_CHEST_PAIRED,
+        Self::CHEST_BLOCK_ACTOR_LARGE_CHEST_PAIRED_POSITION,
+    ];
+
+    // the skull ghosts: the optional feature `stratum.skulls`
+    pub const SKULLS: [EntryId; 2] = [Self::SKULL_BLOCK_RENDERER_RENDER_SKULL, Self::BLOCK_TYPE_FULL_NAME];
 
     // the world key of the data folder; the connection info getter and the storage hooks are optional
     pub const WORLD_KEY: [EntryId; 7] = [
