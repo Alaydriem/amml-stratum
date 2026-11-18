@@ -4,7 +4,7 @@ use stratum_core::structs::hud::{HudControl, HudKey, HudMode, HudState};
 use stratum_core::structs::marker::Axis;
 
 fn full_at(control: HudControl) -> HudState {
-    HudState { mode: HudMode::Full, control }
+    HudState { mode: HudMode::Full, control, build: None }
 }
 
 #[test]

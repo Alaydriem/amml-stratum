@@ -44,3 +44,7 @@ harness = false
 [[bench]]
 name = "stratum_controller"
 harness = false
+
+[[bench]]
+name = "build_order"
+harness = false

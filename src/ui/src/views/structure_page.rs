@@ -71,7 +71,7 @@ impl StructurePage {
                 let height = ui.available_height();
                 let area = ScrollArea::vertical().id_salt(StratumId::StructureCardScroll).auto_shrink([false, false]);
                 ScrollBar::show(ui, area, false, |ui| {
-                    out.extend(FactsPanel::show(ui, snapshot, row, state, height, preview));
+                    FactsPanel::show(ui, snapshot, row, state, height, preview, out);
                 });
             }
             StructureTab::Materials => {

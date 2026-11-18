@@ -3,12 +3,16 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use stratum_core::services::StratumController;
+use stratum_core::structs::build::{
+    BuildConditions, BuildKindsRequest, BuildKindsResult, BuildProbeRequest, BuildProbeResult,
+};
 use stratum_core::structs::easy_place::{InventorySlot, SpotWorld, UseCommand, UseProbe};
 use stratum_core::structs::frame::FrameStatus;
 use stratum_core::structs::ghost::GhostFrame;
 use stratum_core::structs::hud::HudState;
 
 use super::{GhostMeter, ManagerSession, SharedGhost, SharedUi, TickMeter};
+use crate::traits::BuildCore;
 
 // Everything behind the handle's lock, owned by the game thread: the controller and the manager session.
 // The controller is declared first, so a plain drop also stops it before the session unregisters.
@@ -289,5 +293,40 @@ impl HandleState {
     // Stops the controller within its bounded budget. The session unregisters when the state drops.
     pub fn shutdown(&mut self) {
         self.controller.shutdown();
+    }
+}
+
+// The build calls reach the controller through the state. What a probe, a kinds answer or a failed send changes in the
+// snapshot is published at once, so the panel does not wait for the next tick
+impl BuildCore for HandleState {
+    fn set_conditions(&mut self, conditions: BuildConditions) {
+        self.controller.set_build_conditions(conditions);
+    }
+
+    fn take_probe(&mut self) -> Option<BuildProbeRequest> {
+        self.controller.take_build_probe()
+    }
+
+    fn apply_probe(&mut self, result: BuildProbeResult) {
+        self.controller.apply_build_probe(result);
+        self.shared.publish(self.controller.snapshot());
+    }
+
+    fn take_kinds(&mut self) -> Option<BuildKindsRequest> {
+        self.controller.take_build_kinds()
+    }
+
+    fn apply_kinds(&mut self, result: BuildKindsResult) {
+        self.controller.apply_build_kinds(result);
+        self.shared.publish(self.controller.snapshot());
+    }
+
+    fn take_commands(&mut self, out: &mut Vec<String>) {
+        self.controller.take_build_commands(out);
+    }
+
+    fn send_failed(&mut self) {
+        self.controller.build_send_failed();
+        self.shared.publish(self.controller.snapshot());
     }
 }

@@ -1,3 +1,4 @@
+pub mod build_time;
 pub mod digit_groups;
 pub mod item_names;
 pub mod marker_filter;
@@ -12,6 +13,7 @@ pub mod sidebar_row;
 pub mod sidebar_rows;
 pub mod stack_text;
 
+pub use build_time::BuildTime;
 pub use digit_groups::DigitGroups;
 pub use item_names::ItemNames;
 pub use marker_filter::MarkerFilter;

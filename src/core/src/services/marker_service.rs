@@ -6,16 +6,18 @@ use crate::structs::library::{Library, NameLimit, ProjectId, ProjectKind, Projec
 use crate::structs::marker::{Marker, MarkerId, MarkerSet, MarkerTarget, MarkerView, Rotation, TargetState};
 
 // Holds the markers of one world and applies every change to them. Capacity: `max_per_world`
-// from config; a place past it is refused, nothing is evicted.
+// from config; a place past it is refused, nothing is evicted. While the service is locked, the changes that
+// move the active build, retarget a marker or change which marker is active are refused.
 pub struct MarkerService {
     set: MarkerSet,
     config: MarkerConfig,
     dirty: bool,
+    locked: bool,
 }
 
 impl MarkerService {
     pub fn new(set: MarkerSet, config: MarkerConfig) -> Self {
-        Self { set, config, dirty: false }
+        Self { set, config, dirty: false, locked: false }
     }
 
     pub fn set(&self) -> &MarkerSet {
@@ -26,11 +28,20 @@ impl MarkerService {
         self.dirty
     }
 
+    pub fn is_locked(&self) -> bool {
+        self.locked
+    }
+
+    pub fn set_locked(&mut self, locked: bool) {
+        self.locked = locked;
+    }
+
     pub fn mark_saved(&mut self) {
         self.dirty = false;
     }
 
     pub fn place(&mut self, name: &str, origin: [i32; 3], target: MarkerTarget) -> Result<MarkerId, MarkerError> {
+        self.refuse_when_locked()?;
         let name = Self::clean_name(name)?;
         let full = MarkerError::Full { capacity: self.config.max_per_world };
         if self.set.markers.len() >= self.config.max_per_world {
@@ -52,13 +63,18 @@ impl MarkerService {
 
     // Makes the marker the only active one.
     pub fn activate(&mut self, id: MarkerId) -> Result<(), MarkerError> {
+        self.refuse_when_locked()?;
         self.index(id)?;
         self.set.active = Some(id);
         self.dirty = true;
         Ok(())
     }
 
+    // Does nothing while the service is locked.
     pub fn deactivate(&mut self) {
+        if self.locked {
+            return;
+        }
         if self.set.active.take().is_some() {
             self.dirty = true;
         }
@@ -82,6 +98,7 @@ impl MarkerService {
         library: &Library,
         order: &ProjectOrder,
     ) -> Result<(), MarkerError> {
+        self.refuse_when_locked()?;
         let index = self.index(id)?;
         let marker = &mut self.set.markers[index];
         let own = match marker.target {
@@ -233,6 +250,10 @@ impl MarkerService {
         }
     }
 
+    fn refuse_when_locked(&self) -> Result<(), MarkerError> {
+        if self.locked { Err(MarkerError::Locked) } else { Ok(()) }
+    }
+
     fn is_normal(library: &Library, project: ProjectId) -> bool {
         library.projects.iter().any(|entry| entry.id == project && entry.kind == ProjectKind::Normal)
     }
@@ -245,6 +266,7 @@ impl MarkerService {
 
     // Deleting the active marker leaves no marker active.
     pub fn delete(&mut self, id: MarkerId) -> Result<(), MarkerError> {
+        self.refuse_when_locked()?;
         let index = self.index(id)?;
         self.set.markers.remove(index);
         if self.set.active == Some(id) {
@@ -255,7 +277,15 @@ impl MarkerService {
     }
 
     // Applies a HUD action to the active marker.
+    // While the service is locked, the actions that move, turn or switch the marker are refused.
     pub fn apply_hud(&mut self, action: HudAction, layers: u32, order: &[StructureId]) -> Result<(), MarkerError> {
+        let places = matches!(
+            action,
+            HudAction::Move(..) | HudAction::Rotate(_) | HudAction::StructureNext | HudAction::StructurePrev
+        );
+        if places {
+            self.refuse_when_locked()?;
+        }
         let id = self.set.active.ok_or(MarkerError::NotFound)?;
         let index = self.index(id)?;
         MarkerControls::apply(&mut self.set.markers[index], action, layers, order);

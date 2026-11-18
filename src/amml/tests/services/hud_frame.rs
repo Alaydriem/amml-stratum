@@ -6,9 +6,11 @@ use amm_core::structs::frame::{FrameInputData, LayerKind};
 use amml_ui::font::FontSource;
 use amml_ui::theme::Theme;
 use egui::{Context, Pos2, RawInput, Rect, vec2};
+use stratum_core::structs::build::{BuildPhase, BuildSettings, BuildStopReason};
 use stratum_core::structs::hud::HudState;
+use stratum_core::structs::library::StructureId;
 use stratum_core::structs::marker::Rotation;
-use stratum_core::structs::snapshot::{HudRow, LibrarySnapshot};
+use stratum_core::structs::snapshot::{BuildRow, HudRow, LibrarySnapshot};
 
 use crate::support::{CoreSession, Hud, Markers};
 
@@ -134,4 +136,35 @@ fn a_session_with_an_active_marker_draws_the_card() {
     session.open();
     assert!(!Hud::shown(&session));
     assert_eq!(HudPass::new().run(&mut frame, LayerKind::Hud).layer_rect, Rect::NOTHING);
+}
+
+#[test]
+fn an_ended_build_card_shows_when_the_snapshot_has_no_marker_row() {
+    let shared = SharedUi::new_shared(None);
+    let mut frame = HudFrame::new(Arc::clone(&shared));
+    let mut pass = HudPass::new();
+    shared.publish(Arc::new(LibrarySnapshot::empty()));
+    assert!(LibrarySnapshot::empty().hud.is_none());
+    let build = BuildRow {
+        structure: StructureId(1),
+        structure_name: "Tower".to_owned(),
+        phase: BuildPhase::Stopped(BuildStopReason::DimensionChanged),
+        settings: BuildSettings::default(),
+        layer: 2,
+        layers: 5,
+        placed: 10,
+        total: 40,
+        eta_seconds: 3,
+        unplaceable: Vec::new(),
+        notice: None,
+        confirm_stop: false,
+    };
+
+    shared.publish_hud(Some(HudState::new()));
+    let without = pass.run(&mut frame, LayerKind::Hud);
+    shared.publish_hud(Some(HudState { build: Some(Arc::new(build)), ..HudState::new() }));
+    let with = pass.run(&mut frame, LayerKind::Hud);
+
+    assert_eq!(without.layer_rect, Rect::NOTHING);
+    assert!(with.layer_rect.is_positive(), "the stop reason shows with no marker row");
 }

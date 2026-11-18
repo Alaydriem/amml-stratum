@@ -1,9 +1,14 @@
 use std::time::Duration;
 
 use stratum_core::config::StratumConfig;
-use stratum_core::errors::{LibraryError, StructureError};
-use stratum_core::services::{GhostService, LibraryStore, MarkerStore, MaterialsWorker, StratumController};
-use stratum_core::structs::action::{HudAction, LibraryAction, MaterialScope};
+use stratum_core::errors::{LibraryError, MarkerError, StructureError};
+use stratum_core::services::{
+    BuildSettingsStore, GhostService, LibraryStore, MarkerStore, MaterialsWorker, StratumController,
+};
+use stratum_core::structs::action::{BuildAction, HudAction, LibraryAction, MaterialScope};
+use stratum_core::structs::build::{
+    BuildConditions, BuildPhase, BuildProbeResult, BuildSettings, BuildStopReason, PaletteOutcome,
+};
 use stratum_core::structs::frame::FrameStatus;
 use stratum_core::structs::ghost::GhostReport;
 use stratum_core::structs::hud::{HudControl, HudKey, HudMode};
@@ -2649,4 +2654,404 @@ fn gathered_ticks_survive_restart() {
     let mut next = ControllerHarness::start(data.path());
     Scene::load(&mut next, scope);
     assert_eq!(next.snapshot().materials_gathered, [Scene::stone_item()]);
+}
+
+// Steps for the build tests: a controller with a drawn ghost, allowed conditions and the build open.
+struct BuildSteps;
+
+impl BuildSteps {
+    const ALLOWED: BuildConditions = BuildConditions { local: true, cheats: true, operator: true, creative: true };
+
+    // A world with one 2 x 2 x 2 stone structure, its marker, and a ghost build that is ready.
+    fn ready(data: &std::path::Path) -> StratumController {
+        let mut controller = GhostScene::start(data, StratumConfig::default(), [2, 2, 2]);
+        controller.set_build_conditions(Self::ALLOWED);
+        GhostScene::tick_until_jobs(&mut controller, 2.0);
+        controller
+    }
+
+    fn id(controller: &StratumController) -> StructureId {
+        GhostScene::structure_id(controller)
+    }
+
+    // Opens the structure and answers the palette request with every block known.
+    fn open(controller: &mut StratumController) {
+        controller.apply(LibraryAction::Build(BuildAction::Open(Self::id(controller))));
+        // The build loads its structure on the materials thread, so the request comes on a later tick.
+        let started = std::time::Instant::now();
+        let request = loop {
+            controller.tick(&Frames::in_world(GhostScene::WORLD, 2.0));
+            if let Some(request) = controller.take_build_probe() {
+                break request;
+            }
+            assert!(started.elapsed() < std::time::Duration::from_secs(60), "no palette request");
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        };
+        let outcomes = vec![PaletteOutcome::Exact; request.entries.len()];
+        controller.apply_build_probe(BuildProbeResult { outcomes, turn_mismatches: Vec::new() });
+        // The blocks are counted on the build thread, so the panel is ready on a later tick.
+        while Self::phase(controller) != Some(BuildPhase::Ready) {
+            assert!(started.elapsed() < std::time::Duration::from_secs(60), "the panel did not get ready");
+            controller.tick(&Frames::in_world(GhostScene::WORLD, 2.0));
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
+    }
+
+    fn start(controller: &mut StratumController) {
+        controller.apply(LibraryAction::Build(BuildAction::Start));
+    }
+
+    fn commands(controller: &mut StratumController) -> Vec<String> {
+        let mut out = Vec::new();
+        controller.take_build_commands(&mut out);
+        out
+    }
+
+    fn phase(controller: &StratumController) -> Option<BuildPhase> {
+        controller.snapshot().build.as_ref().map(|row| row.phase)
+    }
+
+    // Ticks one second at a time from `time` until the build is done; returns every command on the way.
+    fn until_done(controller: &mut StratumController, time: f64) -> Vec<String> {
+        let started = std::time::Instant::now();
+        let mut commands = Vec::new();
+        let mut at = time;
+        while Self::phase(controller) != Some(BuildPhase::Done) {
+            assert!(started.elapsed() < std::time::Duration::from_secs(60), "the build did not finish");
+            commands.extend(Self::tick(controller, at));
+            at += 1.0;
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
+        commands
+    }
+
+    fn tick(controller: &mut StratumController, time: f64) -> Vec<String> {
+        controller.tick(&Frames::in_world(GhostScene::WORLD, time));
+        Self::commands(controller)
+    }
+}
+
+#[test]
+fn build_allowed_needs_every_condition_and_a_single_structure_marker() {
+    let data = tempfile::tempdir().unwrap();
+    let mut controller = GhostScene::start(data.path(), StratumConfig::default(), [2, 2, 2]);
+    let id = GhostScene::structure_id(&controller);
+    let tick = |controller: &mut StratumController| controller.tick(&Frames::in_world(GhostScene::WORLD, 2.0));
+    tick(&mut controller);
+    assert_eq!(controller.snapshot().build_allowed, None);
+
+    let all = BuildSteps::ALLOWED;
+    let one_missing = [
+        BuildConditions { local: false, ..all },
+        BuildConditions { cheats: false, ..all },
+        BuildConditions { operator: false, ..all },
+        BuildConditions { creative: false, ..all },
+    ];
+    for conditions in one_missing {
+        controller.set_build_conditions(conditions);
+        tick(&mut controller);
+        assert_eq!(controller.snapshot().build_allowed, None, "{conditions:?}");
+    }
+    controller.set_build_conditions(all);
+    tick(&mut controller);
+    assert_eq!(controller.snapshot().build_allowed, Some(id));
+
+    controller.apply(LibraryAction::DeactivateMarker);
+    assert_eq!(controller.snapshot().build_allowed, None);
+}
+
+#[test]
+fn build_allowed_follows_the_project_kind_of_the_marker() {
+    let data = tempfile::tempdir().unwrap();
+    let mut controller = ControllerHarness::start(data.path());
+    let project = Scene::project(&mut controller, data.path(), &[("a", 2)]);
+    controller.tick(&Frames::in_world("W1", 1.0));
+    controller.set_build_conditions(BuildSteps::ALLOWED);
+    let structure = controller.snapshot().projects[0].structures[0].id;
+    controller.apply(LibraryAction::SetProjectKind(project, ProjectKind::BigBuild));
+    controller.apply(LibraryAction::PlaceMarker { name: "Home".to_string(), target: MarkerTarget::Project(project) });
+
+    assert_eq!(controller.snapshot().build_allowed, None);
+
+    controller.apply(LibraryAction::SetProjectKind(project, ProjectKind::Normal));
+    assert_eq!(controller.snapshot().build_allowed, Some(structure));
+}
+
+#[test]
+fn a_build_runs_from_the_panel_to_done_through_the_controller() {
+    let data = tempfile::tempdir().unwrap();
+    let mut controller = BuildSteps::ready(data.path());
+    let id = BuildSteps::id(&controller);
+    let fast = BuildSettings { blocks_per_second: 20, ..BuildSettings::default() };
+    controller.apply(LibraryAction::Build(BuildAction::SetSettings(id, fast)));
+    BuildSteps::open(&mut controller);
+    let row = controller.snapshot().build.clone().unwrap();
+    assert_eq!((row.total, row.settings.blocks_per_second), (8, 20));
+    assert_eq!(controller.snapshot().build_allowed, Some(id));
+
+    BuildSteps::start(&mut controller);
+    assert_eq!(BuildSteps::commands(&mut controller), vec!["/gamerule sendcommandfeedback false".to_string()]);
+    assert_eq!(BuildSteps::phase(&controller), Some(BuildPhase::Clearing));
+
+    let clear = BuildSteps::tick(&mut controller, 3.0);
+    assert_eq!(clear.len(), 1);
+    assert!(clear[0].starts_with("/fill "));
+    assert_eq!(BuildSteps::phase(&controller), Some(BuildPhase::Building));
+
+    // The order of each layer comes from the build thread, so the build may wait a tick or two for a layer.
+    let placed = BuildSteps::until_done(&mut controller, 4.0);
+    assert_eq!(placed.iter().filter(|command| command.starts_with("/setblock ")).count(), 8);
+    assert_eq!(placed.last().map(String::as_str), Some("/gamerule sendcommandfeedback true"));
+    assert_eq!(BuildSteps::phase(&controller), Some(BuildPhase::Done));
+    assert_eq!(controller.hud_state().build.map(|row| row.placed), Some(8));
+}
+
+#[test]
+fn the_marker_is_locked_during_a_build() {
+    let data = tempfile::tempdir().unwrap();
+    let mut controller = BuildSteps::ready(data.path());
+    BuildSteps::open(&mut controller);
+    let origin = controller.snapshot().markers[0].origin;
+    let marker = controller.snapshot().markers[0].id;
+    BuildSteps::start(&mut controller);
+
+    controller.apply_hud(HudAction::Move(Axis::X, 1));
+    controller.apply_hud(HudAction::Rotate(1));
+    controller.apply(LibraryAction::DeleteMarker(marker));
+    controller.apply(LibraryAction::DeactivateMarker);
+    let target = Scene::marker_target(&controller);
+    controller.apply(LibraryAction::PlaceMarker { name: "Other".to_string(), target });
+
+    // A tick shows what the refused changes left: the same marker, in the same place, and a build that goes on.
+    BuildSteps::tick(&mut controller, 3.0);
+    let snapshot = controller.snapshot();
+    assert_eq!(snapshot.markers.len(), 1);
+    assert_eq!(snapshot.markers[0].id, marker);
+    assert_eq!(snapshot.markers[0].origin, origin);
+    assert!(snapshot.markers[0].active);
+    assert_eq!(snapshot.hud.as_ref().map(|hud| hud.rotation), Some(Rotation::R0));
+    assert!(snapshot.notices.contains(&ImportNotice::MarkerRefused(MarkerError::Locked)));
+    assert_eq!(BuildSteps::phase(&controller), Some(BuildPhase::Building));
+
+    controller.apply(LibraryAction::Build(BuildAction::Stop));
+    controller.apply_hud(HudAction::Move(Axis::X, 1));
+    BuildSteps::tick(&mut controller, 3.0);
+    assert_eq!(controller.snapshot().markers[0].origin, [origin[0] + 1, origin[1], origin[2]]);
+}
+
+#[test]
+fn hud_keys_pause_resume_and_stop_a_running_build() {
+    let data = tempfile::tempdir().unwrap();
+    let mut controller = BuildSteps::ready(data.path());
+    BuildSteps::open(&mut controller);
+    BuildSteps::start(&mut controller);
+    BuildSteps::commands(&mut controller);
+
+    controller.hud_key(HudKey::Up);
+    assert_eq!(BuildSteps::phase(&controller), Some(BuildPhase::Paused));
+    controller.hud_key(HudKey::Up);
+    assert_eq!(BuildSteps::phase(&controller), Some(BuildPhase::Clearing));
+
+    // The first Down asks for confirmation; the second stops the build.
+    controller.hud_key(HudKey::Down);
+    assert!(controller.hud_state().build.unwrap().confirm_stop);
+    assert_eq!(BuildSteps::phase(&controller), Some(BuildPhase::Clearing));
+    controller.hud_key(HudKey::Down);
+    assert_eq!(BuildSteps::phase(&controller), Some(BuildPhase::Stopped(BuildStopReason::Operator)));
+    assert_eq!(BuildSteps::commands(&mut controller), vec!["/gamerule sendcommandfeedback true".to_string()]);
+
+    // With the build over, the keys act on the marker again.
+    let before = controller.snapshot().hud.as_ref().unwrap().layer;
+    controller.hud_key(HudKey::Up);
+    BuildSteps::tick(&mut controller, 3.0);
+    assert_ne!(controller.snapshot().hud.as_ref().unwrap().layer, before);
+}
+
+#[test]
+fn a_send_failure_and_a_deleted_structure_stop_the_build() {
+    let data = tempfile::tempdir().unwrap();
+    let mut failed = BuildSteps::ready(data.path());
+    BuildSteps::open(&mut failed);
+    BuildSteps::start(&mut failed);
+    failed.build_send_failed();
+    assert_eq!(BuildSteps::phase(&failed), Some(BuildPhase::Stopped(BuildStopReason::SendFailed)));
+
+    let other = tempfile::tempdir().unwrap();
+    let mut deleted = BuildSteps::ready(other.path());
+    BuildSteps::open(&mut deleted);
+    BuildSteps::start(&mut deleted);
+    BuildSteps::commands(&mut deleted);
+    let id = BuildSteps::id(&deleted);
+    deleted.apply(LibraryAction::DeleteStructure(id));
+    let sent = BuildSteps::tick(&mut deleted, 3.0);
+    assert_eq!(BuildSteps::phase(&deleted), Some(BuildPhase::Stopped(BuildStopReason::StructureDeleted)));
+    assert_eq!(sent.last().map(String::as_str), Some("/gamerule sendcommandfeedback true"));
+}
+
+#[test]
+fn leaving_the_world_ends_the_build_without_a_command() {
+    let data = tempfile::tempdir().unwrap();
+    let mut controller = BuildSteps::ready(data.path());
+    BuildSteps::open(&mut controller);
+    BuildSteps::start(&mut controller);
+    BuildSteps::commands(&mut controller);
+
+    controller.tick(&Frames::main_menu(3.0));
+
+    assert_eq!(BuildSteps::phase(&controller), Some(BuildPhase::Stopped(BuildStopReason::LeftWorld)));
+    assert!(BuildSteps::commands(&mut controller).is_empty());
+}
+
+#[test]
+fn a_build_that_runs_when_the_game_closes_leaves_the_restore_owed_on_disk() {
+    let data = tempfile::tempdir().unwrap();
+    let mut controller = BuildSteps::ready(data.path());
+    BuildSteps::open(&mut controller);
+    BuildSteps::start(&mut controller);
+    BuildSteps::commands(&mut controller);
+    BuildSteps::tick(&mut controller, 5.0);
+    ControllerHarness::flush(&controller);
+    assert!(BuildSettingsStore::new(data.path().to_path_buf()).load(8).unwrap().owes(GhostScene::WORLD));
+
+    // Save and quit mid-build, then play the same world again.
+    controller.tick(&Frames::main_menu(6.0));
+    controller.shutdown();
+    drop(controller);
+    let mut next = BuildSteps::ready(data.path());
+    let sent = BuildSteps::tick(&mut next, 7.0);
+
+    assert_eq!(sent, vec!["/gamerule sendcommandfeedback true".to_string()]);
+    assert!(BuildSteps::tick(&mut next, 8.0).is_empty());
+    ControllerHarness::flush(&next);
+    assert!(!BuildSettingsStore::new(data.path().to_path_buf()).load(8).unwrap().owes(GhostScene::WORLD));
+}
+
+#[test]
+fn build_settings_are_saved_and_dropped_with_their_structure() {
+    let data = tempfile::tempdir().unwrap();
+    let mut controller = BuildSteps::ready(data.path());
+    let id = BuildSteps::id(&controller);
+    let settings = BuildSettings { blocks_per_second: 9, clear_water: false, clear_lava: true };
+    controller.apply(LibraryAction::Build(BuildAction::SetSettings(id, settings)));
+    BuildSteps::tick(&mut controller, 10.0);
+    ControllerHarness::flush(&controller);
+    let saved = BuildSettingsStore::new(data.path().to_path_buf()).load(8).unwrap();
+    assert_eq!(saved.get(id), settings);
+
+    controller.apply(LibraryAction::DeleteStructure(id));
+    BuildSteps::tick(&mut controller, 20.0);
+    ControllerHarness::flush(&controller);
+    assert!(BuildSettingsStore::new(data.path().to_path_buf()).load(8).unwrap().is_empty());
+}
+
+#[test]
+fn saved_build_settings_come_back_after_a_restart() {
+    let data = tempfile::tempdir().unwrap();
+    let mut controller = BuildSteps::ready(data.path());
+    let id = BuildSteps::id(&controller);
+    let settings = BuildSettings { blocks_per_second: 12, clear_water: true, clear_lava: false };
+    controller.apply(LibraryAction::Build(BuildAction::SetSettings(id, settings)));
+    controller.shutdown();
+    drop(controller);
+
+    let mut next = ControllerHarness::start(data.path());
+    next.tick(&Frames::in_world(GhostScene::WORLD, 1.0));
+    GhostScene::place(&mut next);
+    next.set_build_conditions(BuildSteps::ALLOWED);
+    GhostScene::tick_until_jobs(&mut next, 2.0);
+    BuildSteps::open(&mut next);
+
+    assert_eq!(next.snapshot().build.as_ref().map(|row| row.settings), Some(settings));
+}
+
+#[test]
+fn a_hidden_preview_that_was_moved_does_not_move_the_build() {
+    let data = tempfile::tempdir().unwrap();
+    // The preview is drawn at the first place, then hidden, then the marker moves while it is hidden.
+    let mut controller = BuildSteps::ready(data.path());
+    controller.apply_hud(HudAction::ToggleShown);
+    controller.apply_hud(HudAction::Move(Axis::X, 1));
+    BuildSteps::tick(&mut controller, 2.5);
+
+    BuildSteps::open(&mut controller);
+    BuildSteps::start(&mut controller);
+    assert_eq!(BuildSteps::commands(&mut controller), vec!["/gamerule sendcommandfeedback false".to_string()]);
+    let clear = BuildSteps::tick(&mut controller, 3.0);
+    assert_eq!(clear, vec!["/fill 1 64 0 2 65 1 air".to_string()]);
+
+    let sent = BuildSteps::until_done(&mut controller, 4.0);
+    let blocks: Vec<&String> = sent.iter().filter(|command| command.starts_with("/setblock ")).collect();
+    assert_eq!(blocks.len(), 8);
+    for command in blocks {
+        let at: Vec<i32> = command.split_whitespace().skip(1).take(3).map(|part| part.parse().unwrap()).collect();
+        assert!((1..=2).contains(&at[0]) && (64..=65).contains(&at[1]) && (0..=1).contains(&at[2]), "{command}");
+    }
+}
+
+#[test]
+fn a_build_opens_with_the_preview_never_shown() {
+    let data = tempfile::tempdir().unwrap();
+    let mut controller = GhostScene::start(data.path(), StratumConfig::default(), [2, 2, 2]);
+    controller.apply_hud(HudAction::ToggleShown);
+    controller.set_build_conditions(BuildSteps::ALLOWED);
+    assert!(!controller.ghost_wanted());
+
+    BuildSteps::open(&mut controller);
+
+    assert_eq!(controller.snapshot().build.as_ref().map(|row| row.total), Some(8));
+    assert!(controller.ghost_frame().jobs.is_empty());
+}
+
+#[test]
+fn a_dimension_change_ends_the_build_with_the_game_rule_put_back() {
+    let data = tempfile::tempdir().unwrap();
+    let mut controller = BuildSteps::ready(data.path());
+    BuildSteps::open(&mut controller);
+    BuildSteps::start(&mut controller);
+    BuildSteps::commands(&mut controller);
+
+    controller.tick(&Frames::in_dimension(GhostScene::WORLD, -1, 3.0));
+
+    assert_eq!(BuildSteps::phase(&controller), Some(BuildPhase::Stopped(BuildStopReason::DimensionChanged)));
+    assert_eq!(BuildSteps::commands(&mut controller), vec!["/gamerule sendcommandfeedback true".to_string()]);
+}
+
+#[test]
+fn opening_another_structure_while_the_first_one_loads_reaches_ready() {
+    let data = tempfile::tempdir().unwrap();
+    let mut controller = ControllerHarness::start(data.path());
+    let project = Scene::project(&mut controller, data.path(), &[("a", 2), ("b", 3)]);
+    controller.tick(&Frames::in_world(GhostScene::WORLD, 1.0));
+    controller.set_build_conditions(BuildSteps::ALLOWED);
+    controller.apply(LibraryAction::PlaceMarker { name: "Home".to_string(), target: MarkerTarget::Project(project) });
+    // With the preview hidden the ghost loads nothing: only the build asks for structures.
+    controller.apply_hud(HudAction::ToggleShown);
+    let rows = controller.snapshot().projects[0].structures.clone();
+    let (first, second) = (rows[0].id, rows[1].id);
+
+    // The first structure is asked for on this tick and is not back when the second is opened.
+    controller.apply(LibraryAction::Build(BuildAction::Open(first)));
+    controller.tick(&Frames::in_world(GhostScene::WORLD, 2.0));
+    controller.apply_hud(HudAction::StructureNext);
+    controller.apply(LibraryAction::Build(BuildAction::Open(second)));
+
+    let started = std::time::Instant::now();
+    let request = loop {
+        controller.tick(&Frames::in_world(GhostScene::WORLD, 2.0));
+        if let Some(request) = controller.take_build_probe() {
+            break request;
+        }
+        assert!(started.elapsed() < std::time::Duration::from_secs(60), "the second structure never loaded");
+        std::thread::sleep(std::time::Duration::from_millis(2));
+    };
+    let outcomes = vec![PaletteOutcome::Exact; request.entries.len()];
+    controller.apply_build_probe(BuildProbeResult { outcomes, turn_mismatches: Vec::new() });
+    let started = std::time::Instant::now();
+    while BuildSteps::phase(&controller) != Some(BuildPhase::Ready) {
+        assert!(started.elapsed() < std::time::Duration::from_secs(60), "the build did not get ready");
+        controller.tick(&Frames::in_world(GhostScene::WORLD, 2.0));
+        std::thread::sleep(std::time::Duration::from_millis(2));
+    }
+    let row = controller.snapshot().build.clone().unwrap();
+    assert_eq!((row.structure, row.total), (second, 3));
 }

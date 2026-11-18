@@ -261,7 +261,7 @@ impl ProjectPage {
             let height = ui.max_rect().height();
             let area = ScrollArea::vertical().id_salt(StratumId::ProjectCardScroll).auto_shrink([false, false]);
             ScrollBar::show(ui, area, false, |ui| {
-                out.extend(FactsPanel::show(ui, snapshot, row, state, height, preview));
+                FactsPanel::show(ui, snapshot, row, state, height, preview, out);
             });
             return;
         }

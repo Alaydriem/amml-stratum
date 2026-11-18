@@ -1,5 +1,6 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
+mod build;
 mod descriptor;
 mod detours;
 mod easy_place;

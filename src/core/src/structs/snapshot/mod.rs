@@ -1,3 +1,4 @@
+pub mod build_row;
 pub mod hud_row;
 pub mod import_notice;
 pub mod import_pick;
@@ -6,6 +7,7 @@ pub mod marker_row;
 pub mod project_row;
 pub mod structure_row;
 
+pub use build_row::BuildRow;
 pub use hud_row::HudRow;
 pub use import_notice::ImportNotice;
 pub use import_pick::ImportPick;

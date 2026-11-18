@@ -57,3 +57,17 @@ fn request_bytes_the_packet_does_not_read_are_not_sent_and_released_once() {
     assert_eq!(FakePacket::count(&DESTROY_CALLS), 1);
     assert_eq!(FakePacket::count(&DELETE_CALLS), 1);
 }
+
+#[test]
+#[allow(unsafe_code)]
+fn a_null_send_slot_sends_nothing_and_says_so() {
+    let mut calls = FakePacket::calls();
+    // the fake sender's table is empty at slot 0
+    calls.send_slot = 0;
+    // SAFETY: the fake client's vtable holds getPacketSender at the calls' slot
+    let sender = unsafe { PacketSender::of_client(FakePacket::client(), &calls) }.unwrap();
+    let packet = GamePacket::create(&calls, PacketId::ITEM_STACK_REQUEST).unwrap();
+
+    assert!(!sender.send(&packet));
+    assert_eq!(FakePacket::count(&SEND_CALLS), 0);
+}

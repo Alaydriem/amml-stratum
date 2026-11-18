@@ -537,6 +537,12 @@ msgstr ""
 msgid "This world has the most markers allowed."
 msgstr ""
 
+msgid "Markers cannot change while a build runs."
+msgstr ""
+
+msgid "The build stopped because you went to another dimension."
+msgstr ""
+
 msgid "The file name is not allowed."
 msgstr ""
 
@@ -737,4 +743,151 @@ msgstr ""
 
 #. how to move the camera of the 3D preview
 msgid "Scroll to zoom"
+msgstr ""
+
+msgid "Build"
+msgstr ""
+
+msgid "Build structure"
+msgstr ""
+
+#. the name, the size and the number of blocks to place of the structure to build
+#, python-brace-format
+msgid "{name} · {x} × {y} × {z} · {blocks} block"
+msgid_plural "{name} · {x} × {y} × {z} · {blocks} blocks"
+msgstr[0] ""
+msgstr[1] ""
+
+msgid "Blocks per second"
+msgstr ""
+
+#. blocks per second, the unit after the rate number
+msgid "/s"
+msgstr ""
+
+#, python-brace-format
+msgid "{min} to {max}"
+msgstr ""
+
+#, python-brace-format
+msgid "Use a rate from {min} to {max}."
+msgstr ""
+
+msgid "Estimated time"
+msgstr ""
+
+msgid "Clear water"
+msgstr ""
+
+msgid "Clear lava"
+msgstr ""
+
+msgid "BLOCKS THAT CANNOT BE PLACED"
+msgstr ""
+
+msgid "Start"
+msgstr ""
+
+msgid "Pause"
+msgstr ""
+
+msgid "Resume"
+msgstr ""
+
+msgid "Stop"
+msgstr ""
+
+msgid "Press Down again to stop"
+msgstr ""
+
+msgid "The blocks of the structure are being read."
+msgstr ""
+
+msgid "The structure has no block to place."
+msgstr ""
+
+msgid "Clearing"
+msgstr ""
+
+msgid "Building"
+msgstr ""
+
+msgid "Placing water and lava"
+msgstr ""
+
+msgid "Paused"
+msgstr ""
+
+msgid "Done"
+msgstr ""
+
+#, python-brace-format
+msgid "Layer {layer} of {layers}"
+msgstr ""
+
+#, python-brace-format
+msgid "{placed} of {total} blocks"
+msgstr ""
+
+#. a time that is left: hours, minutes and seconds
+#, python-brace-format
+msgid "{seconds} s"
+msgstr ""
+
+#. a time that is left: hours, minutes and seconds
+#, python-brace-format
+msgid "{minutes} min {seconds} s"
+msgstr ""
+
+#. a time that is left: hours, minutes and seconds
+#, python-brace-format
+msgid "{hours} h {minutes} min"
+msgstr ""
+
+#, python-brace-format
+msgid "Time left {seconds} s"
+msgstr ""
+
+#, python-brace-format
+msgid "Time left {minutes} min {seconds} s"
+msgstr ""
+
+#, python-brace-format
+msgid "Time left {hours} h {minutes} min"
+msgstr ""
+
+#, python-brace-format
+msgid "{rate} blocks/s"
+msgstr ""
+
+#. the up and down arrow keys
+msgid "↑"
+msgstr ""
+
+#. the up and down arrow keys
+msgid "↓"
+msgstr ""
+
+msgid "Stand near the structure to keep water or lava"
+msgstr ""
+
+msgid "Too many block kinds to keep water or lava"
+msgstr ""
+
+msgid "You stopped the build."
+msgstr ""
+
+msgid "The build stopped because you left the world."
+msgstr ""
+
+msgid "The build stopped because a condition for building changed."
+msgstr ""
+
+msgid "The build stopped because the marker changed."
+msgstr ""
+
+msgid "The build stopped because the structure was deleted."
+msgstr ""
+
+msgid "The build stopped because a command could not be sent."
 msgstr ""

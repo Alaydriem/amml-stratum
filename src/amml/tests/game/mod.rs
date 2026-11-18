@@ -1,5 +1,6 @@
 mod actor_constants_layout;
 mod block_calls;
+mod block_name;
 mod block_tessellator;
 mod block_tessellator_cache_layout;
 mod block_tessellator_layout;

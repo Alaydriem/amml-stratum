@@ -36,19 +36,30 @@ impl ItemName {
     /// (items live as long as the world's item registry).
     #[allow(unsafe_code)]
     pub unsafe fn bytes_of<'a>(item: *const c_void) -> Option<&'a [u8]> {
+        // SAFETY: forwarded to the caller
+        unsafe { Self::bytes_at(item, Self::FULL_NAME) }
+    }
+
+    /// The `HashedString` at `offset` of `item` as a view of the game's own string, with no copy; None as for
+    /// [`ItemName::of`]. The name of a `BlockType` is read the same way.
+    ///
+    /// # Safety
+    /// `item` must be null or a live game object with a `HashedString` at `offset`, and the view must not be used
+    /// after the game frees the object.
+    #[allow(unsafe_code)]
+    pub unsafe fn bytes_at<'a>(item: *const c_void, offset: u64) -> Option<&'a [u8]> {
         if item.is_null() {
             return None;
         }
         // SAFETY: the caller guarantees a live Item; the HashedString lies inside it
-        let hash = unsafe { RawObject::read::<u64>(item, Self::FULL_NAME) }?;
+        let hash = unsafe { RawObject::read::<u64>(item, offset) }?;
         // SAFETY: as above
-        let [storage, _, size, capacity] =
-            unsafe { RawObject::read::<[usize; 4]>(item, Self::FULL_NAME + Self::TEXT) }?;
+        let [storage, _, size, capacity] = unsafe { RawObject::read::<[usize; 4]>(item, offset + Self::TEXT) }?;
         if size == 0 || size > capacity || size > Self::LIMIT {
             return None;
         }
         let text = if capacity <= Self::INLINE {
-            item.cast::<u8>().wrapping_add((Self::FULL_NAME + Self::TEXT) as usize)
+            item.cast::<u8>().wrapping_add((offset + Self::TEXT) as usize)
         } else {
             if storage == 0 {
                 return None;

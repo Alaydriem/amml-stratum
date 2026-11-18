@@ -16,14 +16,15 @@ use stratum_core::structs::hud::{HudControl, HudMode, HudState};
 use stratum_core::structs::marker::OpacityStep;
 use stratum_core::structs::snapshot::HudRow;
 
-use super::StratumId;
+use super::{HudBuildCard, StratumId};
 use crate::message::StratumMessage;
 
 // The HUD card at the bottom right of the screen: the active marker, its layer readout, its status chips and
 // the keys. Quick mode shows the fixed keys; Full mode shows the control carousel. Display only. The texts, the
 // chips and every measured width are built again only when the row, the key state or the pixels per point
-// change; a frame paints from them.
+// change; a frame paints from them. While a build runs or has ended, the build card takes its place.
 pub struct HudCard {
+    build: HudBuildCard,
     // The row and key state the parts below were built for.
     built: Option<(HudRow, HudState)>,
     // The pixels per point the widths below were measured at; NaN until measured.
@@ -55,43 +56,43 @@ pub struct HudCard {
 
 impl HudCard {
     /// Paper: Stratum, `Stratum · 16 HUD · quick mode`, node "Build HUD": the card width.
-    const WIDTH: f32 = 344.0;
+    pub(crate) const WIDTH: f32 = 344.0;
     /// Paper: Stratum, `Stratum · 16 HUD · quick mode`: the gap from the card to the right edge of the screen.
-    const RIGHT: f32 = 32.0;
+    pub(crate) const RIGHT: f32 = 32.0;
     /// Paper: Stratum, `Stratum · 16 HUD · quick mode`: the gap from the card to the bottom edge of the screen.
-    const BOTTOM: f32 = 40.0;
+    pub(crate) const BOTTOM: f32 = 40.0;
     /// Paper: Stratum, `Stratum · 16 HUD · quick mode`: the padding at the left and right of every section.
-    const PAD_X: f32 = 16.0;
+    pub(crate) const PAD_X: f32 = 16.0;
     /// Paper: Stratum, `Stratum · 16 HUD · quick mode`, header: the padding above the row.
-    const HEADER_TOP: f32 = 14.0;
+    pub(crate) const HEADER_TOP: f32 = 14.0;
     /// Paper: Stratum, `Stratum · 16 HUD · quick mode`, header: the padding under the row.
-    const HEADER_BOTTOM: f32 = 12.0;
+    pub(crate) const HEADER_BOTTOM: f32 = 12.0;
     /// Paper: Stratum, `Stratum · 16 HUD · quick mode`, header: the gap between the pin and the text column.
-    const HEADER_GAP: f32 = 10.0;
+    pub(crate) const HEADER_GAP: f32 = 10.0;
     /// Paper: Stratum, `Stratum · 16 HUD · quick mode`, header: the line height of the pin.
-    const ICON_LINE: f32 = 20.0;
+    pub(crate) const ICON_LINE: f32 = 20.0;
     /// Paper: Stratum, `Stratum · 16 HUD · quick mode`: the gap between two lines of a text column.
-    const TEXT_GAP: f32 = 2.0;
+    pub(crate) const TEXT_GAP: f32 = 2.0;
     /// Paper: Stratum, `Stratum · 16 HUD · quick mode`, layer readout: the padding above the row.
-    const READOUT_TOP: f32 = 6.0;
+    pub(crate) const READOUT_TOP: f32 = 6.0;
     /// Paper: Stratum, `Stratum · 16 HUD · quick mode`, layer readout: the padding under the row.
-    const READOUT_BOTTOM: f32 = 14.0;
+    pub(crate) const READOUT_BOTTOM: f32 = 14.0;
     /// Paper: Stratum, `Stratum · 16 HUD · quick mode`, layer readout: the gap between the big text and the column.
-    const READOUT_GAP: f32 = 12.0;
+    pub(crate) const READOUT_GAP: f32 = 12.0;
     /// Paper: Stratum, `Stratum · 16 HUD · quick mode`, status chips: the padding above the chips.
-    const CHIPS_TOP: f32 = 10.0;
+    pub(crate) const CHIPS_TOP: f32 = 10.0;
     /// Paper: Stratum, `Stratum · 16 HUD · quick mode`, status chips: the padding under the chips.
-    const CHIPS_BOTTOM: f32 = 12.0;
+    pub(crate) const CHIPS_BOTTOM: f32 = 12.0;
     /// Paper: Stratum, `Stratum · 16 HUD · quick mode`, status chips: the gap between chips and between rows.
-    const CHIPS_GAP: f32 = 6.0;
+    pub(crate) const CHIPS_GAP: f32 = 6.0;
     /// Paper: Stratum, `Stratum · 19 HUD · easy place`, easy place notice: the padding above and under the row.
     const NOTICE_PAD_Y: f32 = 10.0;
     /// Paper: Stratum, `Stratum · 19 HUD · easy place`, easy place notice: the gap between the icon and the text.
     const NOTICE_GAP: f32 = 10.0;
     /// Paper: Stratum, `Stratum · 16 HUD · quick mode`, keys: the padding above the section.
-    const KEYS_TOP: f32 = 14.0;
+    pub(crate) const KEYS_TOP: f32 = 14.0;
     /// Paper: Stratum, `Stratum · 16 HUD · quick mode`, keys: the padding under the section.
-    const KEYS_BOTTOM: f32 = 12.0;
+    pub(crate) const KEYS_BOTTOM: f32 = 12.0;
     /// Paper: Stratum, `Stratum · 16 HUD · quick mode`, keys: the gap between the key cross and the mode hint.
     const KEYS_GAP: f32 = 10.0;
     /// Paper: Stratum, `Stratum · 16 HUD · quick mode`, key cross: the gap between the groups.
@@ -104,13 +105,13 @@ impl HudCard {
     const LABEL_LINE: f32 = 16.0;
     /// Paper: Stratum, `Stratum · 15 HUD · full controls` and `16 HUD · quick mode`: the gap between a small cap
     /// and its text.
-    const HINT_GAP: f32 = 5.0;
+    pub(crate) const HINT_GAP: f32 = 5.0;
     /// Paper: Stratum, `Stratum · 15 HUD · full controls`, key hints: the gap between two hint pairs.
-    const HINT_PAIR_GAP: f32 = 8.0;
-    const NAME: TextStyle = TextStyle::new(TypeSize::Label, FontFace::Semibold);
-    const CAPTION: TextStyle = TextStyle::new(TypeSize::Caption, FontFace::Regular);
-    const BIG: TextStyle = TextStyle::new(TypeSize::Display, FontFace::Semibold);
-    const NOTE: TextStyle = TextStyle::new(TypeSize::Note, FontFace::Regular);
+    pub(crate) const HINT_PAIR_GAP: f32 = 8.0;
+    pub(crate) const NAME: TextStyle = TextStyle::new(TypeSize::Label, FontFace::Semibold);
+    pub(crate) const CAPTION: TextStyle = TextStyle::new(TypeSize::Caption, FontFace::Regular);
+    pub(crate) const BIG: TextStyle = TextStyle::new(TypeSize::Display, FontFace::Semibold);
+    pub(crate) const NOTE: TextStyle = TextStyle::new(TypeSize::Note, FontFace::Regular);
 
     pub fn new() -> Self {
         let empty = || Text::message(StratumMessage::HudWholeBuild);
@@ -122,6 +123,7 @@ impl HudCard {
             (cap, Text::message(label))
         };
         Self {
+            build: HudBuildCard::new(),
             built: None,
             measured_at: f32::NAN,
             name: empty(),
@@ -153,8 +155,17 @@ impl HudCard {
         }
     }
 
+    // Paints the build card when the state has a build to show, with or without a marker row. None when it has not.
+    pub fn show_build(&mut self, ctx: &Context, state: &HudState) -> Option<Rect> {
+        let build = state.build.as_ref().filter(|row| HudBuildCard::shows(row))?;
+        Some(self.build.show(ctx, build))
+    }
+
     // Paints the card over the screen and returns its rect.
     pub fn show(&mut self, ctx: &Context, hud: &HudRow, state: &HudState) -> Rect {
+        if let Some(rect) = self.show_build(ctx, state) {
+            return rect;
+        }
         self.rebuild(hud, state);
         if self.measured_at != ctx.pixels_per_point() {
             self.measure(ctx);
@@ -264,7 +275,7 @@ impl HudCard {
         self.items.clear();
         self.items.extend(controls.iter().map(|control| Self::item(*control, hud)));
         self.current = controls.iter().position(|control| *control == state.control).unwrap_or(0);
-        self.built = Some((hud.clone(), *state));
+        self.built = Some((hud.clone(), state.clone()));
     }
 
     // Lays out the chips and measures the key cross and the hints.
@@ -364,11 +375,11 @@ impl HudCard {
         CarouselItem { mark, name: Text::message(name), value }
     }
 
-    fn header_height() -> f32 {
+    pub(crate) fn header_height() -> f32 {
         Self::HEADER_TOP + Self::header_row() + Self::HEADER_BOTTOM
     }
 
-    fn header_row() -> f32 {
+    pub(crate) fn header_row() -> f32 {
         Self::ICON_LINE.max(Self::NAME.size.line_height() + Self::TEXT_GAP + Self::CAPTION.size.line_height())
     }
 
@@ -404,7 +415,7 @@ impl HudCard {
     }
 
     // A 1 px `line-overlay` border across the card, ending at `bottom`.
-    fn divider(painter: &Painter, rect: Rect, bottom: f32) {
+    pub(crate) fn divider(painter: &Painter, rect: Rect, bottom: f32) {
         let width = <spacing::Divider as SpacingToken>::VALUE;
         Draw::divider(painter, rect.x_range(), bottom - width, <color::LineOverlay as ColorToken>::VALUE);
     }
@@ -487,7 +498,7 @@ impl HudCard {
         Self::paint_group(painter, middle, cross_top, &[cap_up, cap_down], layer);
         Self::paint_group(painter, left + total - Self::SIDE_WIDTH / 2.0, side_top, &[cap_right], opacity);
         let hint = cross_top + Self::cross_height() + Self::KEYS_GAP;
-        Self::paint_hints(painter, rect.center().x, hint, &self.quick_hints, &self.quick_widths);
+        Self::paint_hints(painter, rect.center().x, hint, &self.quick_hints, &self.quick_widths, &[]);
     }
 
     // Caps stacked from `top`, centred on `centre`, then the label.
@@ -507,22 +518,31 @@ impl HudCard {
     fn paint_full(&self, painter: &Painter, rect: Rect, top: f32) {
         let carousel = Carousel::new(&self.items, self.current);
         let row = carousel.paint(painter, pos2(rect.left(), top), Self::WIDTH);
-        Self::paint_hints(painter, rect.center().x, row.bottom(), &self.full_hints, &self.full_widths);
+        Self::paint_hints(painter, rect.center().x, row.bottom(), &self.full_hints, &self.full_widths, &[]);
     }
 
-    // A centred row of small key caps from `top`, each followed by its text.
-    fn paint_hints(painter: &Painter, centre: f32, top: f32, pairs: &[(KeyCap, Text)], widths: &[(f32, f32)]) {
+    // A centred row of small key caps from `top`, each followed by its text. A text takes the colour of the same index
+    // in `tones`, or the faint text colour where `tones` has none.
+    pub(crate) fn paint_hints(
+        painter: &Painter,
+        centre: f32,
+        top: f32,
+        pairs: &[(KeyCap, Text)],
+        widths: &[(f32, f32)],
+        tones: &[Color32],
+    ) {
         let gaps = pairs.len().saturating_sub(1) as f32 * Self::HINT_PAIR_GAP;
         let total = widths.iter().map(|(cap, label)| cap + Self::HINT_GAP + label).sum::<f32>() + gaps;
         let height = KeyCapSize::HudHint.height();
         let middle = top + height / 2.0;
         let faint = <color::TextFaint as ColorToken>::VALUE;
         let mut x = centre - total / 2.0;
-        for ((cap, label), (cap_width, label_width)) in pairs.iter().zip(widths) {
+        for (index, ((cap, label), (cap_width, label_width))) in pairs.iter().zip(widths).enumerate() {
             let rect = Rect::from_min_size(pos2(x, top), vec2(*cap_width, height));
             cap.paint(painter, rect);
             let at = pos2(rect.right() + Self::HINT_GAP, middle);
-            Draw::text(painter, at, Align2::LEFT_CENTER, label, Self::CAPTION, faint, TextFit::Line);
+            let tone = tones.get(index).copied().unwrap_or(faint);
+            Draw::text(painter, at, Align2::LEFT_CENTER, label, Self::CAPTION, tone, TextFit::Line);
             x = at.x + label_width + Self::HINT_PAIR_GAP;
         }
     }

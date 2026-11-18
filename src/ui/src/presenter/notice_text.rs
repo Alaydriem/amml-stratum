@@ -87,6 +87,7 @@ impl NoticeText {
             MarkerError::NameEmpty => StratumMessage::ReasonNameEmpty,
             MarkerError::NameTooLong => StratumMessage::ReasonNameTooLong,
             MarkerError::Full { .. } => StratumMessage::ReasonMarkersFull,
+            MarkerError::Locked => StratumMessage::ReasonMarkerLocked,
         }
     }
 }

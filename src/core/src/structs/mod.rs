@@ -1,5 +1,6 @@
 pub mod action;
 pub mod block;
+pub mod build;
 pub mod easy_place;
 pub mod frame;
 pub mod ghost;

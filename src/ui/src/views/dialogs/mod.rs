@@ -1,6 +1,7 @@
 pub mod assign_choice;
 pub mod assign_dialog;
 pub mod assign_subject;
+pub mod build_dialog;
 pub mod delete_dialog;
 pub mod dialog_form;
 pub mod move_dialog;
@@ -10,6 +11,7 @@ pub mod rename_dialog;
 pub use assign_choice::AssignChoice;
 pub use assign_dialog::AssignDialog;
 pub use assign_subject::AssignSubject;
+pub use build_dialog::BuildDialog;
 pub use delete_dialog::DeleteDialog;
 pub use dialog_form::DialogForm;
 pub use move_dialog::MoveDialog;

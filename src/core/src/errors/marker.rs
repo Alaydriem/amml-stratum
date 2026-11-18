@@ -10,4 +10,6 @@ pub enum MarkerError {
     NameTooLong,
     #[error("world has {capacity} markers, the most allowed")]
     Full { capacity: usize },
+    #[error("markers cannot change while a build runs")]
+    Locked,
 }

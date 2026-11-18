@@ -19,6 +19,12 @@ impl BlockFactory {
         BlockState::new(full_name.to_string(), BlockStates::default())
     }
 
+    // A block in another namespace with states, written out in full.
+    pub fn namespaced_with(full_name: &str, states: &[(&str, StateValue)]) -> BlockState {
+        let pairs = states.iter().map(|(key, value)| ((*key).to_string(), value.clone())).collect();
+        BlockState::new(full_name.to_string(), BlockStates::new(pairs))
+    }
+
     pub fn item(name: &str) -> ItemId {
         ItemId(format!("minecraft:{name}"))
     }

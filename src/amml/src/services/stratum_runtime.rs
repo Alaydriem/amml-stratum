@@ -13,6 +13,7 @@ use amml_game::{
 };
 use amml_sdk::{HookHandle, ModDirs, ModRuntime};
 
+use crate::build::BuildExecutor;
 use crate::easy_place::UseHooks;
 use crate::game::ClientWorld;
 use crate::ghost::{BlockChangeListener, SkullSlot};
@@ -21,8 +22,8 @@ use crate::services::{BlockChangeHub, BlockChangeQueue, RendererSlot, SharedGhos
 use crate::services::{GatePlacer, GateRequest, GateRunner};
 use crate::traits::UseCore;
 use crate::types::{
-    BlockActorCalls, BlockChange, CoreState, GhostCalls, LinkState, ListenerSlots, PacketCalls, PathList, PlayerCalls,
-    QueuedChange, StratumEntry, UseCalls,
+    BlockActorCalls, BlockChange, BuildCalls, CoreState, GhostCalls, LinkState, ListenerSlots, PacketCalls, PathList,
+    PlayerCalls, QueuedChange, StratumEntry, UseCalls,
 };
 
 // what the detours share: the stop latch, the client the tick saw last, the entries, the folders, the core with its
@@ -160,6 +161,7 @@ impl StratumRuntime {
             let _ = self.block_actors.set(BlockActorCalls::new(entries, Self::heap_delete));
         }
         self.renderer.install(calls);
+        self.start_build(calls);
         self.start_easy_place();
         #[cfg(feature = "gate")]
         {
@@ -186,6 +188,20 @@ impl StratumRuntime {
             *self.request.lock().unwrap_or_else(PoisonError::into_inner) = request;
         }
         self.latch.lower();
+    }
+
+    // enable: the build executor for the calls, or a stopped one when a build entry is missing or the command string
+    // does not fit its packet
+    fn start_build(&self, ghost: &GhostCalls) {
+        let Some(entries) = self.entries.get() else { return };
+        let calls = match BuildCalls::new(entries, ghost) {
+            Ok(calls) => Some(calls),
+            Err(error) => {
+                curia::warn!("build is off, its calls were not made", { error: error.to_string() });
+                None
+            }
+        };
+        self.core.lock().unwrap_or_else(PoisonError::into_inner).build = BuildExecutor::new(calls);
     }
 
     // enable: the use driver for the calls
@@ -253,9 +269,9 @@ impl StratumRuntime {
         #[cfg(feature = "gate")]
         let yaw = yaw.map(|pose| pose.yaw);
         #[cfg(feature = "gate")]
-        let CoreState { handle, frame, picker, last_tick_ok, placer, .. } = &mut *core;
+        let CoreState { handle, frame, picker, last_tick_ok, placer, build, .. } = &mut *core;
         #[cfg(not(feature = "gate"))]
-        let CoreState { handle, frame, picker, last_tick_ok, .. } = &mut *core;
+        let CoreState { handle, frame, picker, last_tick_ok, build, .. } = &mut *core;
         let Some(handle) = handle.as_ref() else { return };
         self.block_changes.drain(|change| Self::apply_change(handle, change));
         let dropped = self.block_changes.take_dropped();
@@ -288,6 +304,10 @@ impl StratumRuntime {
         #[cfg(feature = "gate")]
         if let Some(placer) = placer.as_mut() {
             placer.after_tick(handle.shared());
+        }
+        if ticked {
+            // SAFETY: `client` is the live ClientInstance of the running update, and the entries are its build's
+            let _ = handle.with_state(|state| unsafe { build.tick(client.as_ptr(), entries, state) });
         }
         if ticked != *last_tick_ok {
             if ticked {

@@ -4,6 +4,7 @@
 
 #![deny(unsafe_code)]
 
+pub mod build;
 pub mod detours;
 pub mod easy_place;
 pub mod errors;

@@ -43,16 +43,31 @@ impl<'a> ClientLevel<'a> {
         }
     }
 
+    // the game's live `LevelData`; `None` when the entry is off or the game returns null
+    #[allow(unsafe_code)]
+    fn level_data(&self) -> Option<*mut c_void> {
+        let slot = self.entries.get(StratumEntry::CLIENT_LEVEL_GET_LEVEL_DATA)?;
+        // SAFETY: the wrapper holds a live ClientLevel, whose first qword is its Level vtable; the entry is the slot
+        let function = unsafe { RawObject::slot(self.ptr.as_ptr(), slot) }?;
+        // SAFETY: the slot holds `LevelData& Level::getLevelData()`, a reference returned as a pointer
+        unsafe { RawObject::call_pointer(function, self.ptr.as_ptr()) }
+    }
+
+    /// The byte of the level data at `offset`, for a flag field the build entries name. `None` when the entry is off or
+    /// the game returns null. Game thread.
+    #[allow(unsafe_code)]
+    pub fn level_byte(&self, offset: u64) -> Option<u8> {
+        let data = self.level_data()?;
+        // SAFETY: the game returns its live LevelData, and the entries name offsets inside it
+        unsafe { RawObject::read::<u8>(data, offset) }
+    }
+
     /// The level name of the level data, with bytes that are not UTF-8 replaced. `None` when an entry is off, the
     /// mirror does not fit or the game returns null. Game thread.
     #[allow(unsafe_code)]
     pub fn level_name(&self) -> Option<String> {
         let kind = LevelDataLayoutKind::of(self.entries)?;
-        let slot = self.entries.get(StratumEntry::CLIENT_LEVEL_GET_LEVEL_DATA)?;
-        // SAFETY: the wrapper holds a live ClientLevel, whose first qword is its Level vtable; the entry is the slot
-        let function = unsafe { RawObject::slot(self.ptr.as_ptr(), slot) }?;
-        // SAFETY: the slot holds `LevelData& Level::getLevelData()`, a reference returned as a pointer
-        let data = unsafe { RawObject::call_pointer(function, self.ptr.as_ptr()) }?;
+        let data = self.level_data()?;
         if !data.cast::<LevelDataLayout2651>().is_aligned() {
             return None;
         }

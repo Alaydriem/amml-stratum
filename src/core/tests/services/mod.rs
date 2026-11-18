@@ -1,7 +1,14 @@
 mod atomic_file;
+mod block_classifier;
 mod block_entity_names;
 mod block_entity_turner;
+mod block_state_turner;
+mod build_order;
+mod build_service;
+mod build_session;
 mod chest_pairer;
+mod clear_planner;
+mod command_text;
 mod easy_place_service;
 mod ghost_assembler;
 mod ghost_ray;
