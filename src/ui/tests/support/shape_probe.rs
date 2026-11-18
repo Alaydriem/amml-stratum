@@ -15,6 +15,21 @@ impl ShapeProbe {
         shapes.iter().flat_map(|clipped| Self::collect(&clipped.shape, needle)).collect()
     }
 
+    // The colour of the first text that is exactly `needle`.
+    pub fn exact_colour(shapes: &[ClippedShape], needle: &str) -> Option<Color32> {
+        shapes.iter().find_map(|clipped| Self::colour_of(&clipped.shape, needle))
+    }
+
+    fn colour_of(shape: &Shape, needle: &str) -> Option<Color32> {
+        match shape {
+            Shape::Text(text) if text.galley.text() == needle => {
+                text.galley.job.sections.first().map(|section| section.format.color)
+            }
+            Shape::Vec(shapes) => shapes.iter().find_map(|inner| Self::colour_of(inner, needle)),
+            _ => None,
+        }
+    }
+
     // The rects of every rectangle filled with exactly `fill`, in painted order.
     pub fn fill_rects(shapes: &[ClippedShape], fill: Color32) -> Vec<Rect> {
         shapes.iter().flat_map(|clipped| Self::collect_fill(&clipped.shape, fill)).collect()

@@ -34,8 +34,8 @@ impl FactsPanel {
     const PREVIEW_MIN_HEIGHT: f32 = 230.0;
     const FACT: TextStyle = TextStyle::new(TypeSize::Help, FontFace::Regular);
 
-    // `height` is the room the card fills from where it starts, so the footer sits at the bottom of that room.
-    // Returns the action of Place marker here when it was clicked.
+    // `height` is the room the card fills from where it starts, so the footer sits at the bottom of that room. The
+    // actions a click asks for, such as Place marker here or a build button, go into `out`.
     pub fn show(
         ui: &mut Ui,
         snapshot: &LibrarySnapshot,
@@ -43,11 +43,11 @@ impl FactsPanel {
         state: &mut LibraryUiState,
         height: f32,
         preview: Option<&mut StructurePreview>,
-    ) -> Option<LibraryAction> {
+        out: &mut Vec<LibraryAction>,
+    ) {
         let bottom = ui.cursor().top() + height;
         let frame = Surface::frame(SurfaceLevel::Raised, Elevation::Flat);
         let inset = CardFooter::inset(&frame);
-        let mut placed = None;
         frame.show(ui, |ui| {
             ui.set_width(ui.available_width());
             ui.spacing_mut().item_spacing.y = 0.0;
@@ -61,12 +61,11 @@ impl FactsPanel {
             ui.add_space(Self::FACTS_GAP);
             Self::facts_line(ui, row);
             ui.add_space(Self::ACTIONS_GAP);
-            ItemActions::show(ui, snapshot, DialogItem::Structure(row.id), Some(row), state);
+            ItemActions::show(ui, snapshot, DialogItem::Structure(row.id), Some(row), state, out);
             CardFooter::show(ui, bottom, inset, |ui| {
-                placed = MarkerActions::show(ui, snapshot, MarkerTarget::Structure(row.id), None, state);
+                out.extend(MarkerActions::show(ui, snapshot, MarkerTarget::Structure(row.id), None, state));
             });
         });
-        placed
     }
 
     // The room the preview takes: what is left above the footer once the facts line and the actions have theirs.

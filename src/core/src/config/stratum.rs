@@ -1,5 +1,6 @@
 use super::{
-    CacheConfig, DebugConfig, EasyPlaceConfig, GhostConfig, ImportSettings, LibraryConfig, MarkerConfig, PreviewConfig,
+    BuildConfig, CacheConfig, DebugConfig, EasyPlaceConfig, GhostConfig, ImportSettings, LibraryConfig, MarkerConfig,
+    PreviewConfig,
 };
 
 #[derive(Debug, Clone, Default, PartialEq, serde::Deserialize)]
@@ -11,6 +12,7 @@ pub struct StratumConfig {
     pub cache: CacheConfig,
     pub ghost: GhostConfig,
     pub easy_place: EasyPlaceConfig,
+    pub build: BuildConfig,
     pub preview: PreviewConfig,
     pub debug: DebugConfig,
 }

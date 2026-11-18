@@ -114,6 +114,11 @@ entries = [
   # optional, stratum.skulls
   "SkullBlockRenderer.renderSkull",
   "BlockType.mNameInfo.mFullName",
+  # optional, stratum.build (the block type name and the chunk lookup are also listed for skulls and water_tint)
+  "CommandRequestPacket.mCommand",
+  "CommandRequestPacket.size",
+  "Player.getPlayerPermissionLevel",
+  "LevelData.mCommandsEnabled",
   # required: easy place, the build hooks, the probe, the inventory and the item stack request
   "LegacyClientNetworkHandler.vtable",
   "ClientNetworkHandler.handle.ItemStackResponsePacket",

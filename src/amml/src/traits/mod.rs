@@ -1,9 +1,21 @@
+pub mod block_grid;
+pub mod build_core;
+pub mod build_facts;
+pub mod build_world;
 pub mod client_source;
+pub mod command_sink;
 pub mod dialog_runner;
+pub mod palette_game;
 pub mod use_core;
 pub mod world_source;
 
+pub use block_grid::BlockGrid;
+pub use build_core::BuildCore;
+pub use build_facts::BuildFacts;
+pub use build_world::BuildWorld;
 pub use client_source::ClientSource;
+pub use command_sink::CommandSink;
 pub use dialog_runner::DialogRunner;
+pub use palette_game::PaletteGame;
 pub use use_core::UseCore;
 pub use world_source::WorldSource;

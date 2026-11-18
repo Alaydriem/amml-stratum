@@ -43,7 +43,7 @@ impl CardPass {
     }
 
     fn full(control: HudControl) -> HudState {
-        HudState { mode: HudMode::Full, control }
+        HudState { mode: HudMode::Full, control, build: None }
     }
 
     // The shapes of the second frame, so fonts have settled, and the card's rect.

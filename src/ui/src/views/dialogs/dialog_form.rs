@@ -11,6 +11,7 @@ use crate::views::StratumId;
 // The frame every dialog shares: a modal card with the dialog's body, then the confirm and Cancel buttons.
 pub struct DialogForm {
     title: Text,
+    subtitle: Option<Text>,
     confirm: Text,
     kind: ButtonKind,
     blocked: Option<Text>,
@@ -18,7 +19,13 @@ pub struct DialogForm {
 
 impl DialogForm {
     pub fn new(title: Text, confirm: Text) -> Self {
-        Self { title, confirm, kind: ButtonKind::Primary, blocked: None }
+        Self { title, subtitle: None, confirm, kind: ButtonKind::Primary, blocked: None }
+    }
+
+    // A line under the title, such as the name and size of the item the form is for.
+    pub fn subtitle(mut self, subtitle: Text) -> Self {
+        self.subtitle = Some(subtitle);
+        self
     }
 
     // The confirm button is the danger button.
@@ -35,8 +42,11 @@ impl DialogForm {
 
     pub fn show(self, ctx: &Context, body: impl FnOnce(&mut Ui)) -> FormAnswer {
         let mut answer = FormAnswer::Pending;
-        let Self { title, confirm, kind, blocked } = self;
-        let modal = ModalFrame::new(egui::Id::unique(StratumId::Dialog), title);
+        let Self { title, subtitle, confirm, kind, blocked } = self;
+        let mut modal = ModalFrame::new(egui::Id::unique(StratumId::Dialog), title);
+        if let Some(subtitle) = subtitle {
+            modal = modal.subtitle(subtitle);
+        }
         let response = modal.show(ctx, body, |ui| {
             let mut button = TextButton::new(kind, confirm);
             if let Some(reason) = blocked {

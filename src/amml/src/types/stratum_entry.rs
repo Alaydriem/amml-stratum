@@ -182,6 +182,15 @@ impl StratumEntry {
     pub const SKULL_BLOCK_RENDERER_RENDER_SKULL: EntryId = EntryId::new("SkullBlockRenderer.renderSkull");
     pub const BLOCK_TYPE_FULL_NAME: EntryId = EntryId::new("BlockType.mNameInfo.mFullName");
 
+    // the build: the command packet the game's chat builds, and the conditions that say a build may run. The
+    // factory, the sender and the packet slots are the easy place entries
+    pub const COMMAND_REQUEST_PACKET_M_COMMAND: EntryId = EntryId::new("CommandRequestPacket.mCommand");
+    // sizeof(CommandRequestPacket), the check that the command string lies inside the packet
+    pub const COMMAND_REQUEST_PACKET_SIZE: EntryId = EntryId::new("CommandRequestPacket.size");
+    pub const PLAYER_GET_PLAYER_PERMISSION_LEVEL: EntryId = EntryId::new("Player.getPlayerPermissionLevel");
+    // the "Activate Cheats" world setting (the `commandsEnabled` tag of level.dat)
+    pub const LEVEL_DATA_COMMANDS_ENABLED: EntryId = EntryId::new("LevelData.mCommandsEnabled");
+
     // where the registry object sits in the BlockTypeRegistry.instance global
     pub const REGISTRY_IN_OWNER: u64 = 0x18;
 
@@ -323,6 +332,17 @@ impl StratumEntry {
 
     // the skull ghosts: the optional feature `stratum.skulls`
     pub const SKULLS: [EntryId; 2] = [Self::SKULL_BLOCK_RENDERER_RENDER_SKULL, Self::BLOCK_TYPE_FULL_NAME];
+
+    // the build: the optional feature `stratum.build`. The block type name and the chunk lookup are also asked for
+    // by `stratum.skulls` and `stratum.water_tint`, so each feature goes off by its own entries
+    pub const BUILD: [EntryId; 6] = [
+        Self::COMMAND_REQUEST_PACKET_M_COMMAND,
+        Self::COMMAND_REQUEST_PACKET_SIZE,
+        Self::PLAYER_GET_PLAYER_PERMISSION_LEVEL,
+        Self::LEVEL_DATA_COMMANDS_ENABLED,
+        Self::BLOCK_TYPE_FULL_NAME,
+        Self::BLOCK_SOURCE_GET_CHUNK,
+    ];
 
     // the world key of the data folder; the connection info getter and the storage hooks are optional
     pub const WORLD_KEY: [EntryId; 7] = [

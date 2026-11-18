@@ -33,15 +33,15 @@ impl PacketSender {
         Some(Self { sender, send_slot: calls.send_slot })
     }
 
-    /// Sends `packet` to the server.
-    pub fn send(&self, packet: &GamePacket) {
+    /// Sends `packet` to the server; false when the packet or the send slot is null, so nothing was sent.
+    pub fn send(&self, packet: &GamePacket) -> bool {
         let target = packet.as_ptr();
         if target.is_null() {
-            return;
+            return false;
         }
         // SAFETY: the client's live sender, whose vtable holds send at the entry's slot
         #[allow(unsafe_code)]
-        let Some(function) = (unsafe { RawObject::slot(self.sender, self.send_slot) }) else { return };
+        let Some(function) = (unsafe { RawObject::slot(self.sender, self.send_slot) }) else { return false };
         // SAFETY: the slot holds `void PacketSender::send(Packet&)`
         #[allow(unsafe_code)]
         let send: SendFn = unsafe { std::mem::transmute(function) };
@@ -50,6 +50,7 @@ impl PacketSender {
         unsafe {
             send(self.sender, target)
         };
+        true
     }
 
     /// Makes a packet of `id`, fills it from `bytes`, runs `before_send` (the game's own inventory screen opens the

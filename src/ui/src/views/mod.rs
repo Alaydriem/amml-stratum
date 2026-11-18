@@ -1,8 +1,10 @@
+pub mod build_actions;
 pub mod card_footer;
 pub mod detail_view;
 pub mod dialogs;
 pub mod facts_panel;
 pub mod grid_editor;
+pub mod hud_build_card;
 pub mod hud_card;
 pub mod ids;
 pub mod import_button;
@@ -20,10 +22,12 @@ pub mod structure_list_page;
 pub mod structure_page;
 pub mod structure_preview;
 
+pub use build_actions::BuildActions;
 pub use card_footer::CardFooter;
 pub use detail_view::DetailView;
 pub use facts_panel::FactsPanel;
 pub use grid_editor::GridEditor;
+pub use hud_build_card::HudBuildCard;
 pub use hud_card::HudCard;
 pub use ids::StratumId;
 pub use import_button::ImportButton;

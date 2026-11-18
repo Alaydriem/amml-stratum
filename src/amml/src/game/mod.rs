@@ -3,6 +3,7 @@
 
 pub mod actor_constants_layout;
 pub mod block_calls;
+pub mod block_name;
 pub mod block_registry;
 pub mod block_tessellator;
 pub mod block_tessellator_cache_layout;
@@ -56,6 +57,7 @@ pub mod world_matrix_ref;
 
 pub use actor_constants_layout::ActorConstantsLayout;
 pub use block_calls::BlockCalls;
+pub use block_name::BlockName;
 pub use block_registry::BlockRegistry;
 pub use block_tessellator::GameBlockTessellator;
 pub use block_tessellator_cache_layout::BlockTessellatorCacheLayout;

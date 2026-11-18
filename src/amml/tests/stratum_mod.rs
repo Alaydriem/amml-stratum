@@ -15,12 +15,55 @@ fn with_every_entry_no_feature_is_off() {
 }
 
 #[test]
-fn every_entry_is_asked_for_once() {
-    let ids: Vec<EntryId> = StratumMod::wanted().iter().map(|(id, _)| *id).collect();
+fn every_entry_is_asked_for_once_per_need() {
+    let wanted = StratumMod::wanted();
 
-    for (index, id) in ids.iter().enumerate() {
-        assert!(!ids[index + 1..].contains(id), "{} twice", id.as_str());
+    for (index, (id, need)) in wanted.iter().enumerate() {
+        let again = wanted[index + 1..].iter().any(|(other, other_need)| other == id && other_need == need);
+        assert!(!again, "{} twice for the same need", id.as_str());
     }
+}
+
+#[test]
+fn an_entry_two_features_share_is_asked_for_by_each_feature() {
+    let wanted = StratumMod::wanted();
+
+    for shared in [StratumEntry::BLOCK_TYPE_FULL_NAME, StratumEntry::BLOCK_SOURCE_GET_CHUNK] {
+        let needs: Vec<_> = wanted.iter().filter(|(id, _)| *id == shared).map(|(_, need)| *need).collect();
+        assert_eq!(needs.len(), 2, "{}", shared.as_str());
+        assert!(needs.iter().all(|need| matches!(need, EntryNeed::Optional { .. })));
+    }
+}
+
+#[test]
+fn a_missing_build_entry_turns_only_the_build_off_and_the_log_says_build_is_off() {
+    for missing in [
+        StratumEntry::PLAYER_GET_PLAYER_PERMISSION_LEVEL,
+        StratumEntry::LEVEL_DATA_COMMANDS_ENABLED,
+        StratumEntry::COMMAND_REQUEST_PACKET_M_COMMAND,
+        StratumEntry::COMMAND_REQUEST_PACKET_SIZE,
+    ] {
+        let values: Vec<_> = FakeResolver::values().into_iter().filter(|(id, _)| *id != missing).collect();
+
+        let entries = StratumMod::resolve(&FakeResolver::new(&values)).unwrap();
+        let lines = StratumMod::off_lines(&entries);
+
+        assert_eq!(lines.len(), 1, "{lines:?}");
+        assert!(lines[0].starts_with(&format!("{} is off", StratumFeature::BUILD)), "{lines:?}");
+        assert!(lines[0].contains(missing.as_str()), "{lines:?}");
+    }
+}
+
+#[test]
+fn a_missing_block_type_name_turns_the_skulls_and_the_build_off_and_nothing_else() {
+    let values: Vec<_> =
+        FakeResolver::values().into_iter().filter(|(id, _)| *id != StratumEntry::BLOCK_TYPE_FULL_NAME).collect();
+
+    let entries = StratumMod::resolve(&FakeResolver::new(&values)).unwrap();
+    let mut off: Vec<&str> = entries.off_features().into_iter().map(|(feature, _)| feature).collect();
+    off.sort_unstable();
+
+    assert_eq!(off, vec![StratumFeature::BUILD, StratumFeature::SKULLS]);
 }
 
 #[test]

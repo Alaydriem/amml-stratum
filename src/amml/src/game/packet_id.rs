@@ -8,6 +8,7 @@ pub struct PacketId {
 
 impl PacketId {
     pub const INTERACT: Self = Self { id: 33, name: "InteractPacket" };
+    pub const COMMAND_REQUEST: Self = Self { id: 77, name: "CommandRequestPacket" };
     pub const CONTAINER_OPEN: Self = Self { id: 46, name: "ContainerOpenPacket" };
     pub const CONTAINER_CLOSE: Self = Self { id: 47, name: "ContainerClosePacket" };
     pub const ITEM_STACK_REQUEST: Self = Self { id: 147, name: "ItemStackRequestPacket" };

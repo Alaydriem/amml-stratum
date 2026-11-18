@@ -1,7 +1,7 @@
-use super::{HudRow, ImportNotice, ImportPick, MarkerRow, ProjectRow, StructureRow};
+use super::{BuildRow, HudRow, ImportNotice, ImportPick, MarkerRow, ProjectRow, StructureRow};
 use crate::structs::action::MaterialScope;
 use crate::structs::layout::{BigBuildLayout, LayoutIssue};
-use crate::structs::library::ProjectId;
+use crate::structs::library::{ProjectId, StructureId};
 use crate::structs::material::{ItemId, MaterialList};
 
 // An immutable view of the library for the UI. `revision` grows with every change.
@@ -34,6 +34,10 @@ pub struct LibrarySnapshot {
     pub markers_read_only: bool,
     // The HUD card of the active marker; None without one.
     pub hud: Option<HudRow>,
+    // The structure whose page may show Build: every build condition holds and the active marker shows it.
+    pub build_allowed: Option<StructureId>,
+    // The settings panel or the card of the build; None when no build is open.
+    pub build: Option<BuildRow>,
 }
 
 impl LibrarySnapshot {
@@ -57,6 +61,8 @@ impl LibrarySnapshot {
             library_read_only: false,
             markers_read_only: false,
             hud: None,
+            build_allowed: None,
+            build: None,
         }
     }
 }

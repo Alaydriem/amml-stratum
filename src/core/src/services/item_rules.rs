@@ -1,3 +1,4 @@
+use crate::services::BlockClassifier;
 use crate::structs::material::{ItemId, ItemYield};
 use crate::structs::structure::{BlockState, StateValue};
 
@@ -85,7 +86,7 @@ impl ItemRules {
         if Self::NOT_HOLDABLE.binary_search(&name).is_ok() || name.starts_with(LIGHT_BLOCK_PREFIX) {
             return ItemYield::None;
         }
-        if Self::is_upper_half(name, block) {
+        if BlockClassifier::is_second_half(block) {
             return ItemYield::None;
         }
         if let Some(base) = name.strip_suffix("_double_slab") {
@@ -142,17 +143,6 @@ impl ItemRules {
         ItemId(format!("{NAMESPACE}{name}"))
     }
 
-    // Doors and tall plants store the upper half as a second block; beds store the head.
-    fn is_upper_half(name: &str, block: &BlockState) -> bool {
-        if name.ends_with("_door") || Self::TALL_PLANTS.binary_search(&name).is_ok() {
-            return Self::flag(block, "upper_block_bit");
-        }
-        if name == "bed" || name.ends_with("_bed") {
-            return Self::flag(block, "head_piece_bit");
-        }
-        false
-    }
-
     // Only a source block (depth 0) can be picked up with a bucket.
     fn bucket(block: &BlockState, bucket: &str) -> ItemYield {
         match Self::number(block, "liquid_depth") {
@@ -186,9 +176,5 @@ impl ItemRules {
             StateValue::Bool(value) => Some(i64::from(*value)),
             StateValue::Text(_) => None,
         }
-    }
-
-    fn flag(block: &BlockState, key: &str) -> bool {
-        Self::number(block, key).is_some_and(|value| value != 0)
     }
 }

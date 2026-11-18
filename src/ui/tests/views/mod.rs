@@ -1,6 +1,9 @@
+mod build_actions;
+mod build_dialog;
 mod dialogs;
 mod facts_panel;
 mod grid_editor;
+mod hud_build_card;
 mod hud_card;
 mod import_notices;
 mod library_view;

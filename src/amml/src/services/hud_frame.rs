@@ -38,14 +38,18 @@ impl FrameHandler for HudFrame {
         if let Some(state) = self.shared.try_hud() {
             self.state = state;
         }
-        let Some(state) = self.state else {
+        let Some(state) = self.state.clone() else {
             return Self::nothing();
         };
         if let Some(snapshot) = self.shared.try_snapshot() {
             self.snapshot = snapshot;
         }
         let Some(row) = self.snapshot.hud.as_ref() else {
-            return Self::nothing();
+            // No marker row: a build that runs or ended still shows its card, with the reason it stopped.
+            return match self.card.show_build(ctx, &state) {
+                Some(rect) => FrameReply { cursor: CursorShape::Default, layer_rect: rect },
+                None => Self::nothing(),
+            };
         };
         let rect = self.card.show(ctx, row, &state);
         FrameReply { cursor: CursorShape::Default, layer_rect: rect }

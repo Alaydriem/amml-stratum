@@ -3,29 +3,37 @@ use amml_ui::state::DisabledReason;
 use amml_ui::tokens::{SpacingToken, spacing};
 use amml_ui::widget::{ButtonKind, TextButton};
 use egui::Ui;
+use stratum_core::structs::action::LibraryAction;
 use stratum_core::structs::snapshot::{LibrarySnapshot, StructureRow};
 
+use super::BuildActions;
 use super::dialogs::{DeleteDialog, MoveDialog, RenameDialog};
 use crate::message::StratumMessage;
 use crate::presenter::ItemNames;
 use crate::state::{Dialog, DialogItem, LibraryUiState};
 
-// The Rename, Move to project and Delete buttons of a project or structure page.
+// The Rename, Move to project and Delete buttons of a project or structure page, after the build buttons of a
+// structure.
 pub struct ItemActions;
 
 impl ItemActions {
-    // `moving` is the structure the Move button is for; a project has none, so it gets no Move button.
+    // `moving` is the structure the Move button is for; a project has none, so it gets no Move button and no build
+    // buttons. A build button pushes its action into `out`.
     pub fn show(
         ui: &mut Ui,
         snapshot: &LibrarySnapshot,
         item: DialogItem,
         moving: Option<&StructureRow>,
         state: &mut LibraryUiState,
+        out: &mut Vec<LibraryAction>,
     ) {
         let enabled = !snapshot.library_read_only;
         let reason = || DisabledReason::message(StratumMessage::ReadOnlyReason);
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = <spacing::S as SpacingToken>::VALUE;
+            if let Some(row) = moving {
+                BuildActions::show(ui, snapshot, row.id, state, out);
+            }
             let rename = TextButton::new(ButtonKind::Secondary, Text::message(StratumMessage::Rename))
                 .enabled(enabled, reason());
             if rename.show(ui).clicked() {

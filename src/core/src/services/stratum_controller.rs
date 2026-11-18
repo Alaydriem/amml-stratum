@@ -5,13 +5,16 @@ use std::time::{Duration, Instant};
 
 use super::materials_job::MaterialsJob;
 use super::{
-    EasyPlaceService, GhostService, HudInput, ImportWorker, InboxScanner, ItemRules, LayoutSolver, LibraryService,
-    LibraryStore, MarkerService, MarkerStore, MaterialCounter, MaterialsWorker, PlaceNeeds, StoreWriter,
-    StructureCache,
+    BuildService, BuildSettingsStore, EasyPlaceService, GhostService, HudInput, ImportWorker, InboxScanner, ItemRules,
+    LayoutSolver, LibraryService, LibraryStore, MarkerService, MarkerStore, MaterialCounter, MaterialsWorker,
+    PlaceNeeds, StoreWriter, StructureCache,
 };
 use crate::config::{GhostConfig, ImportConfig, StratumConfig};
 use crate::errors::{ImportBusy, LibraryError, MarkerError, StoreError, StructureError};
-use crate::structs::action::{HudAction, LibraryAction, MaterialScope};
+use crate::structs::action::{BuildAction, HudAction, LibraryAction, MaterialScope};
+use crate::structs::build::{
+    BuildConditions, BuildKindsRequest, BuildKindsResult, BuildProbeRequest, BuildProbeResult, BuildSettingsBook,
+};
 use crate::structs::easy_place::{
     EasyPlaceNotice, EasyPlaceTelemetry, InventorySlot, PlaceNeed, SpotWorld, UseCommand, UseProbe,
 };
@@ -24,7 +27,7 @@ use crate::structs::library::{Library, NewStructure, Project, ProjectId, Project
 use crate::structs::marker::{Marker, MarkerSet, MarkerTarget, Rotation, WorldKey};
 use crate::structs::material::{GatheredItem, ItemId, MaterialList, StructureLoad, StructureLoaded};
 use crate::structs::snapshot::{
-    HudRow, ImportNotice, ImportPick, LibrarySnapshot, MarkerRow, ProjectRow, StructureRow,
+    BuildRow, HudRow, ImportNotice, ImportPick, LibrarySnapshot, MarkerRow, ProjectRow, StructureRow,
 };
 use crate::structs::structure::Structure;
 use crate::structs::worker_wakeups::WorkerWakeups;
@@ -119,6 +122,15 @@ pub struct StratumController {
     // The latest easy place notice, the time it was taken and, for a missing block, the item it needs.
     // Bound: one entry.
     easy_place_notice: Option<(f64, EasyPlaceNotice, Option<ItemId>)>,
+    // The build session, the settings of each structure and the commands waiting for the mod.
+    build: BuildService,
+    build_store: BuildSettingsStore,
+    // False when the build settings file could not be read, so a save cannot overwrite it.
+    build_writable: bool,
+    // The structure the materials worker was asked for the open build, until its answer comes.
+    build_loading: Option<StructureId>,
+    // The structure of the open build, until the build has taken it. Bound: one entry.
+    build_loaded: Option<(StructureId, Arc<Structure>)>,
 }
 
 impl StratumController {
@@ -156,6 +168,14 @@ impl StratumController {
         if cleanup {
             Self::remove_orphans(&data_dir, &library);
         }
+        let build_store = BuildSettingsStore::new(data_dir.clone());
+        let (build_book, build_writable) = match build_store.load(config.build.settings_capacity()) {
+            Ok(book) => (book, true),
+            Err(error) => {
+                curia::error!("build settings file could not be read", { error: error.to_string() });
+                (BuildSettingsBook::new(config.build.settings_capacity()), false)
+            }
+        };
         if let Err(error) = std::fs::create_dir_all(data_dir.join("import")) {
             curia::error!("inbox folder could not be created", { error: error.to_string() });
         }
@@ -215,11 +235,16 @@ impl StratumController {
             easy_place: EasyPlaceService::new(config.easy_place.clone()),
             place_needs: None,
             easy_place_notice: None,
+            build: BuildService::new(config.build.clone(), build_book),
+            build_store,
+            build_writable,
+            build_loading: None,
+            build_loaded: None,
             structures_dir: data_dir.join("structures"),
             config,
         };
         let mut first = controller.library_part();
-        controller.set_small_parts(&mut first, Vec::new(), None);
+        controller.set_small_parts(&mut first, Vec::new(), None, None, None);
         controller.snapshot = Arc::new(first);
         controller
     }
@@ -257,6 +282,7 @@ impl StratumController {
         self.save_if_due();
         self.release_saved_sources();
         self.update_ghost();
+        self.update_build();
         self.refresh();
     }
 
@@ -304,6 +330,9 @@ impl StratumController {
             LibraryAction::PlaceMarker { name, target } => self.place_marker(&name, target),
             LibraryAction::ActivateMarker(id) => self.change_markers(|markers| markers.activate(id)),
             LibraryAction::DeactivateMarker => self.change_markers(|markers| {
+                if markers.is_locked() {
+                    return Err(MarkerError::Locked);
+                }
                 markers.deactivate();
                 Ok(())
             }),
@@ -324,6 +353,7 @@ impl StratumController {
             LibraryAction::DeleteMarker(id) => self.change_markers(|markers| markers.delete(id)),
             LibraryAction::LoadMaterials(scope) => self.load_materials(scope),
             LibraryAction::SetGathered { scope, item, gathered } => self.set_gathered(scope, item, gathered),
+            LibraryAction::Build(action) => self.apply_build(action),
         }
         self.refresh();
     }
@@ -331,6 +361,12 @@ impl StratumController {
     // One HUD key press: moves the mode or the carousel, or applies the action the key makes to the active
     // marker. The mode and the carousel move even with no active marker.
     pub fn hud_key(&mut self, key: HudKey) {
+        let used = self.build.hud_key(key, self.status.time_seconds);
+        self.sync_build();
+        if used {
+            self.refresh();
+            return;
+        }
         let has_structures = self.hud_has_structures();
         if let Some(action) = HudInput::press(&mut self.hud, key, has_structures) {
             self.apply_hud(action);
@@ -339,7 +375,7 @@ impl StratumController {
 
     // Where the HUD keys stand.
     pub fn hud_state(&self) -> HudState {
-        self.hud
+        HudState { build: self.build.hud_row(self.status.time_seconds), ..self.hud.clone() }
     }
 
     // Applies a key action to the active marker. Without an active marker nothing happens. The
@@ -413,6 +449,48 @@ impl StratumController {
             self.changed = true;
         }
         command
+    }
+
+    // What the game says about the world and the player. Call it each tick before `tick`.
+    pub fn set_build_conditions(&mut self, conditions: BuildConditions) {
+        self.build.set_conditions(conditions);
+        self.sync_build();
+        self.refresh();
+    }
+
+    // The palette of the open build for the game to look up, once. Answer with `apply_build_probe`.
+    pub fn take_build_probe(&mut self) -> Option<BuildProbeRequest> {
+        self.build.take_probe()
+    }
+
+    pub fn apply_build_probe(&mut self, result: BuildProbeResult) {
+        self.build.apply_probe(&result);
+        self.sync_build();
+        self.refresh();
+    }
+
+    // The box whose block kinds the game reads for a clear that keeps water or lava, once. Answer with
+    // `apply_build_kinds`.
+    pub fn take_build_kinds(&mut self) -> Option<BuildKindsRequest> {
+        self.build.take_kinds()
+    }
+
+    pub fn apply_build_kinds(&mut self, result: BuildKindsResult) {
+        self.build.apply_kinds(result, self.status.time_seconds);
+        self.sync_build();
+        self.refresh();
+    }
+
+    // Moves the commands the build wants sent to `out`, oldest first. Call it after `tick`.
+    pub fn take_build_commands(&mut self, out: &mut Vec<String>) {
+        self.build.take_commands(out);
+    }
+
+    // The mod could not send a command: a running build stops.
+    pub fn build_send_failed(&mut self) {
+        self.build.send_failed();
+        self.sync_build();
+        self.refresh();
     }
 
     // A block of the world changed at `cell`; `block` is its name.
@@ -593,9 +671,11 @@ impl StratumController {
     // Like `shutdown`, with the time for the writes and the store thread given.
     pub fn shutdown_within(&mut self, budget: Duration) {
         let started = Instant::now();
+        self.build.shutdown();
         self.ghost.shutdown();
         self.save_library();
         self.save_markers();
+        self.save_build_settings();
         self.materials_job = None;
         self.materials_worker = None;
         self.worker = None;
@@ -612,6 +692,60 @@ impl StratumController {
         self.picked_in_flight.clear();
         // Sources whose structure did not reach the library file stay in the inbox for the next start.
         self.awaiting_save.clear();
+    }
+
+    fn apply_build(&mut self, action: BuildAction) {
+        self.build.apply(action, self.status.time_seconds, self.markers.as_ref(), &self.library);
+        self.sync_build();
+    }
+
+    // Runs the build for this tick. The build loads its own structure and never uses the ghost, so a hidden or
+    // moved preview cannot change what it places.
+    fn update_build(&mut self) {
+        let mut structure = None;
+        match self.build.wants_structure() {
+            Some(id) => {
+                structure = self.cache.get(id).or_else(|| {
+                    self.build_loaded.as_ref().filter(|(loaded, _)| *loaded == id).map(|(_, found)| Arc::clone(found))
+                });
+                if structure.is_none() && self.build_loading != Some(id) {
+                    self.request_build_structure(id);
+                }
+            }
+            None => {
+                self.build_loading = None;
+                self.build_loaded = None;
+            }
+        }
+        self.build.tick(&self.status, structure.as_ref(), self.markers.as_ref(), &self.library);
+        self.sync_build();
+    }
+
+    // Asks the materials worker for the structure of the open build. A full queue is retried on the next tick.
+    fn request_build_structure(&mut self, id: StructureId) {
+        let Some(entry) = self.library.library().structures.iter().find(|entry| entry.id == id) else {
+            self.build.structure_unreadable();
+            return;
+        };
+        let Some(worker) = &self.materials_worker else {
+            self.build.structure_unreadable();
+            return;
+        };
+        let load = StructureLoad { id, path: self.structures_dir.join(&entry.file_name) };
+        if worker.submit(load).is_ok() {
+            self.build_loading = Some(id);
+        }
+    }
+
+    // Takes the change flag of the build, and locks the markers while a build runs.
+    fn sync_build(&mut self) {
+        if self.build.take_changed() {
+            self.changed = true;
+        }
+        let locked = self.build.locks_marker();
+        if let Some(markers) = self.markers.as_mut() {
+            markers.set_locked(locked);
+        }
     }
 
     fn sync_world(&mut self) {
@@ -822,6 +956,7 @@ impl StratumController {
             Ok(entry) => {
                 self.cache.evict(id);
                 self.ghost_loaded.remove(&id);
+                self.build.structure_deleted(id);
                 self.drop_materials();
                 self.remove_stored_file(&entry.file_name);
                 self.library_changed = true;
@@ -1138,6 +1273,19 @@ impl StratumController {
 
     fn take_loaded(&mut self, id: StructureId, outcome: Result<Arc<Structure>, StructureError>) {
         self.take_ghost_load(id, &outcome);
+        if self.build_loading == Some(id) {
+            self.build_loading = None;
+        }
+        if self.build.wants_structure() == Some(id) {
+            match &outcome {
+                Ok(structure) => self.build_loaded = Some((id, Arc::clone(structure))),
+                Err(error) => {
+                    curia::warn!("build structure could not be read", { structure: id.0, error: error.to_string() });
+                    self.build.structure_unreadable();
+                    self.changed = true;
+                }
+            }
+        }
         let wanted = self.materials_job.as_ref().is_some_and(|job| job.awaiting == Some(id));
         match outcome {
             Ok(structure) => {
@@ -1297,11 +1445,14 @@ impl StratumController {
                 writer.retry_failed();
             }
         }
-        let dirty = self.library.is_dirty() || self.markers.as_ref().is_some_and(MarkerService::is_dirty);
+        let dirty = self.library.is_dirty()
+            || self.markers.as_ref().is_some_and(MarkerService::is_dirty)
+            || self.build.is_dirty();
         if dirty && now >= self.next_save_at {
             self.next_save_at = now + Self::SAVE_INTERVAL_SECONDS;
             self.save_library();
             self.save_markers();
+            self.save_build_settings();
         }
     }
 
@@ -1318,6 +1469,20 @@ impl StratumController {
         match queued {
             Ok(()) => self.library.mark_saved(),
             Err(error) => curia::error!("library could not be queued for saving", { error: error.to_string() }),
+        }
+    }
+
+    fn save_build_settings(&mut self) {
+        if !self.build.is_dirty() || !self.build_writable {
+            return;
+        }
+        let Some(writer) = &self.store_writer else {
+            return;
+        };
+        let queued = self.build_store.encode(self.build.book()).and_then(|(path, bytes)| writer.submit(path, bytes));
+        match queued {
+            Ok(()) => self.build.mark_saved(),
+            Err(error) => curia::error!("build settings could not be queued for saving", { error: error.to_string() }),
         }
     }
 
@@ -1366,11 +1531,13 @@ impl StratumController {
         let library = library_changed.then(|| self.library_part());
         let layouts = library.as_ref().map_or(&current.layouts, |next| &next.layouts);
         let hud = self.hud_row(layouts);
-        if library.is_none() && self.small_parts_match(&current, &rows, &hud) {
+        let build = self.build.row();
+        let allowed = self.build.allowed(self.markers.as_ref(), &self.library);
+        if library.is_none() && self.small_parts_match(&current, &rows, &hud, &build, allowed) {
             return;
         }
         let mut next = library.unwrap_or_else(|| (*current).clone());
-        self.set_small_parts(&mut next, rows, hud);
+        self.set_small_parts(&mut next, rows, hud, build, allowed);
         if library_changed && next == *current {
             return;
         }
@@ -1408,9 +1575,18 @@ impl StratumController {
     }
 
     // Everything except the library part and the revision.
-    fn set_small_parts(&self, snapshot: &mut LibrarySnapshot, rows: Vec<MarkerRow>, hud: Option<HudRow>) {
+    fn set_small_parts(
+        &self,
+        snapshot: &mut LibrarySnapshot,
+        rows: Vec<MarkerRow>,
+        hud: Option<HudRow>,
+        build: Option<BuildRow>,
+        allowed: Option<StructureId>,
+    ) {
         snapshot.markers = rows;
         snapshot.hud = hud;
+        snapshot.build = build;
+        snapshot.build_allowed = allowed;
         snapshot.in_world = self.status.in_world;
         snapshot.has_player = self.status.has_player;
         snapshot.materials.clone_from(&self.materials);
@@ -1425,9 +1601,18 @@ impl StratumController {
         snapshot.markers_read_only = !self.markers_writable;
     }
 
-    fn small_parts_match(&self, snapshot: &LibrarySnapshot, rows: &[MarkerRow], hud: &Option<HudRow>) -> bool {
+    fn small_parts_match(
+        &self,
+        snapshot: &LibrarySnapshot,
+        rows: &[MarkerRow],
+        hud: &Option<HudRow>,
+        build: &Option<BuildRow>,
+        allowed: Option<StructureId>,
+    ) -> bool {
         snapshot.markers == rows
             && snapshot.hud == *hud
+            && snapshot.build == *build
+            && snapshot.build_allowed == allowed
             && snapshot.in_world == self.status.in_world
             && snapshot.has_player == self.status.has_player
             && snapshot.materials == self.materials

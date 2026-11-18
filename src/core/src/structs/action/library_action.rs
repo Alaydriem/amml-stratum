@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use super::MaterialScope;
+use super::{BuildAction, MaterialScope};
 use crate::structs::layout::GridCell;
 use crate::structs::library::{ProjectId, ProjectKind, StructureId};
 use crate::structs::marker::{MarkerId, MarkerTarget};
@@ -30,4 +30,5 @@ pub enum LibraryAction {
     LoadMaterials(MaterialScope),
     // Ticks or clears an item of the material list shown for `scope`.
     SetGathered { scope: MaterialScope, item: ItemId, gathered: bool },
+    Build(BuildAction),
 }

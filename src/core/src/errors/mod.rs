@@ -1,3 +1,4 @@
+pub mod build;
 pub mod ghost;
 pub mod import;
 pub mod library;
@@ -8,6 +9,7 @@ pub mod preview;
 pub mod store;
 pub mod structure;
 
+pub use build::BuildError;
 pub use ghost::GhostError;
 pub use import::ImportBusy;
 pub use library::LibraryError;

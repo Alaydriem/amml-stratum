@@ -1,3 +1,4 @@
+use crate::build::BuildExecutor;
 use crate::ghost::BlockChangeListener;
 #[cfg(feature = "gate")]
 use crate::services::GatePlacer;
@@ -18,6 +19,8 @@ pub struct CoreState {
     pub listener: Option<BlockChangeListener>,
     // the listener could not be made, so block changes stay off until the game restarts
     pub listener_failed: bool,
+    // reads the build conditions, answers the core's requests and sends its commands; stopped while the build is off
+    pub build: BuildExecutor,
     #[cfg(feature = "gate")]
     pub placer: Option<GatePlacer>,
 }
@@ -32,6 +35,7 @@ impl CoreState {
             last_tick_ok: true,
             listener: None,
             listener_failed: false,
+            build: BuildExecutor::new(None),
             #[cfg(feature = "gate")]
             placer: None,
         }

@@ -157,7 +157,7 @@ impl SharedUi {
     // Render thread: the HUD card state last published, or None while the tick holds the lock, so a frame keeps
     // the state it drew last rather than wait or blink.
     pub fn try_hud(&self) -> Option<Option<HudState>> {
-        self.hud.try_lock().ok().map(|current| *current)
+        self.hud.try_lock().ok().map(|current| current.clone())
     }
 
     // The snapshot last published. Waits for the lock; the frame uses `try_snapshot`.

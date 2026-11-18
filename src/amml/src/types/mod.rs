@@ -1,5 +1,6 @@
 pub mod block_actor_calls;
 pub mod block_change;
+pub mod build_calls;
 pub mod chest_pair_calls;
 pub mod connection_info;
 pub mod copy_failure;
@@ -34,6 +35,7 @@ pub mod use_frame;
 
 pub use block_actor_calls::BlockActorCalls;
 pub use block_change::BlockChange;
+pub use build_calls::BuildCalls;
 pub use chest_pair_calls::ChestPairCalls;
 pub use connection_info::ConnectionInfo;
 pub use copy_failure::CopyFailure;

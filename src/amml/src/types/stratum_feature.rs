@@ -27,8 +27,19 @@ impl StratumFeature {
     // the biome water colour of water ghosts. Off, water keeps the texture's own grey
     pub const WATER_TINT: &'static str = "stratum.water_tint";
 
-    pub const OPTIONAL: [&'static str; 6] =
-        [Self::CONNECTION, Self::WORLD_FOLDER, Self::BLOCK_ACTORS, Self::LARGE_CHESTS, Self::SKULLS, Self::WATER_TINT];
+    // the build: the command packet, the permission and cheat reads and the block reads of the clear. Off, the build
+    // conditions read false and the build button never shows
+    pub const BUILD: &'static str = "stratum.build";
+
+    pub const OPTIONAL: [&'static str; 7] = [
+        Self::CONNECTION,
+        Self::WORLD_FOLDER,
+        Self::BLOCK_ACTORS,
+        Self::LARGE_CHESTS,
+        Self::SKULLS,
+        Self::WATER_TINT,
+        Self::BUILD,
+    ];
 
     // the entries of `feature`; none for a name that is not an optional feature
     pub fn entries(feature: &str) -> &'static [EntryId] {
@@ -39,6 +50,7 @@ impl StratumFeature {
             Self::LARGE_CHESTS => &StratumEntry::LARGE_CHESTS,
             Self::SKULLS => &StratumEntry::SKULLS,
             Self::WATER_TINT => &StratumEntry::WATER_TINT,
+            Self::BUILD => &StratumEntry::BUILD,
             _ => &[],
         }
     }

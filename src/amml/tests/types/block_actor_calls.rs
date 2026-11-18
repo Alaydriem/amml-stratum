@@ -40,14 +40,16 @@ fn a_missing_large_chest_entry_turns_only_the_large_chests_off() {
 }
 
 #[test]
-fn a_missing_skull_entry_turns_only_the_skulls_off() {
+fn a_missing_skull_entry_turns_the_skulls_off_and_no_other_ghost_feature() {
     for missing in StratumEntry::SKULLS {
         let (lines, calls) = without(missing);
 
         let calls = calls.unwrap_or_else(|| panic!("{}: the block actors stay on", missing.as_str()));
         assert!(calls.skull.is_none(), "{}", missing.as_str());
         assert!(calls.chest.is_some(), "{}", missing.as_str());
-        assert_eq!(lines.len(), 1, "{lines:?}");
+        // the block type name is also read by the build, which goes off with the skulls
+        let shared = if missing == StratumEntry::BLOCK_TYPE_FULL_NAME { 2 } else { 1 };
+        assert_eq!(lines.len(), shared, "{lines:?}");
         assert!(lines[0].starts_with(&format!("{} is off", StratumFeature::SKULLS)), "{lines:?}");
     }
 }

@@ -30,6 +30,9 @@ impl FakeResolver {
                     StratumEntry::LEVEL_DATA_LEVEL_NAME => 0x2A8,
                     StratumEntry::GAME_MODE_PLAYER => 0x8,
                     StratumEntry::PLAYER_PLAYER_INVENTORY => 0x5B8,
+                    StratumEntry::COMMAND_REQUEST_PACKET_M_COMMAND => 0x30,
+                    StratumEntry::COMMAND_REQUEST_PACKET_SIZE => 0xA0,
+                    StratumEntry::LEVEL_DATA_COMMANDS_ENABLED => 0x4C9,
                     EntryId::CAMERA_FORWARD => CameraLayout::FORWARD,
                     _ => 0x1000 + index as u64 * 0x10,
                 };

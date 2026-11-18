@@ -45,6 +45,11 @@ impl<'a> ClientWorld<'a> {
         // SAFETY: the game returns its live ClientLevel, or null out of a world
         unsafe { ClientLevel::from_raw(level, self.entries) }
     }
+
+    /// The byte of the level data at `offset`; `None` out of a world or when the level data cannot be read.
+    pub fn level_byte(&self, offset: u64) -> Option<u8> {
+        self.client_level()?.level_byte(offset)
+    }
 }
 
 impl WorldSource for ClientWorld<'_> {
