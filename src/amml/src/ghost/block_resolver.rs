@@ -1,26 +1,20 @@
-use std::ffi::c_void;
+use amml_api::{BlockHandle, Blocks};
 
-use crate::game::{BlockCalls, BlockRegistry, NbtBlock};
-use crate::ghost::{DoubleSided, LayerPasses};
-use crate::types::{GhostCalls, NbtLookup};
+use crate::services::PaletteBlocks;
+use crate::types::PaletteLookup;
 
-/// Turns the ghost palette into the game's blocks for one world, because a `Block` pointer is valid only in the
-/// world it was looked up in. Each entry is read from its NBT bytes, then looked up by name and states, then by name
-/// with the default states, then as the game's unknown block; each fallback is counted for the next report.
+/// Turns the ghost palette into block handles of the joined world, because a handle is valid only in the world it was
+/// looked up in. Each entry is looked up by name and states, the loader falling back to the name with the default
+/// states, then as the game's unknown block; each fallback is counted for the next report. An entry that gives no
+/// block at all is drawn as air, so every palette id names a handle the mesher accepts.
 ///
 /// Bound: one entry per palette id, sized by core's palette, which is bounded below `u16::MAX` entries.
 pub struct BlockResolver {
-    registry: BlockRegistry,
-    nbt: NbtBlock,
-    game: BlockCalls,
-    blocks: Vec<*const c_void>,
-    graphics: Vec<*const c_void>,
-    passes: Vec<LayerPasses>,
-    double_sided: Vec<bool>,
-    air: *const c_void,
-    air_graphics: *const c_void,
-    stone: *const c_void,
-    unknown: *const c_void,
+    handles: Vec<BlockHandle>,
+    // per palette id: the entry is air, or no block was found for it, so it holds no block entity
+    empty: Vec<bool>,
+    air: Option<BlockHandle>,
+    unknown: Option<BlockHandle>,
     unknown_count: u32,
     default_state_count: u32,
 }
@@ -28,124 +22,78 @@ pub struct BlockResolver {
 impl BlockResolver {
     /// The palette id of an empty cell.
     pub const EMPTY: u16 = u16::MAX;
+    pub const AIR: &'static str = "minecraft:air";
 
-    pub fn new(calls: &GhostCalls) -> Self {
+    pub fn new() -> Self {
         Self {
-            registry: BlockRegistry::new(calls),
-            nbt: NbtBlock::new(BlockRegistry::new(calls), calls),
-            game: BlockCalls::new(calls),
-            blocks: Vec::new(),
-            graphics: Vec::new(),
-            passes: Vec::new(),
-            double_sided: Vec::new(),
-            air: std::ptr::null(),
-            air_graphics: std::ptr::null(),
-            stone: std::ptr::null(),
-            unknown: std::ptr::null(),
+            handles: Vec::new(),
+            empty: Vec::new(),
+            air: None,
+            unknown: None,
             unknown_count: 0,
             default_state_count: 0,
         }
     }
 
-    /// Looks up air, stone and the unknown block for a newly joined world and drops the palette; false when air or
-    /// stone is missing, which no ghost can be built without.
-    #[allow(unsafe_code)]
-    pub fn join(&mut self) -> bool {
+    /// Looks up air and the unknown block for a newly joined world and drops the palette; false when air is missing,
+    /// which no ghost can be built without.
+    pub fn join(&mut self, blocks: &Blocks) -> bool {
         self.leave();
-        self.air = self.registry.by_name("minecraft:air");
-        self.stone = self.registry.by_name("minecraft:stone");
-        self.unknown = self.registry.by_name("minecraft:unknown");
-        // SAFETY: a block the registry gave for this world, or null
-        self.air_graphics = unsafe { self.game.graphics(self.air) };
-        curia::info!("ghost blocks joined the world", {
-            air: !self.air.is_null(),
-            stone: !self.stone.is_null(),
-            unknown: !self.unknown.is_null()
-        });
-        !self.air.is_null() && !self.stone.is_null()
+        self.air = blocks.from_state(Self::AIR, &[]).map(|found| found.block);
+        self.unknown = PaletteBlocks::unknown(blocks);
+        self.air.is_some()
     }
 
-    /// Drops every lookup; the pointers belong to the world that was left.
+    /// Drops every handle; they belong to the world that was left.
     pub fn leave(&mut self) {
-        self.blocks.clear();
-        self.graphics.clear();
-        self.passes.clear();
-        self.double_sided.clear();
-        self.air = std::ptr::null();
-        self.air_graphics = std::ptr::null();
-        self.stone = std::ptr::null();
-        self.unknown = std::ptr::null();
+        self.handles.clear();
+        self.empty.clear();
+        self.air = None;
+        self.unknown = None;
     }
 
-    /// Resolves the palette `entries` (each one entry's NBT bytes) in place of the last palette, each block turned
-    /// by `rotation` quarter turns (0 to 3, clockwise seen from above). The entries are always the unturned states,
-    /// so no block is turned twice.
-    #[allow(unsafe_code)]
-    pub fn resolve<'a>(&mut self, entries: impl Iterator<Item = &'a [u8]>, rotation: u8) {
-        self.blocks.clear();
-        self.graphics.clear();
-        self.passes.clear();
-        self.double_sided.clear();
+    /// Resolves the palette `entries` (each one entry's NBT bytes) in place of the last palette, each block turned by
+    /// `rotation` quarter turns (0 to 3, clockwise seen from above) by the game. The entries are always the unturned
+    /// states, so no block is turned twice.
+    pub fn resolve<'a>(&mut self, blocks: &Blocks, entries: impl Iterator<Item = &'a [u8]>, rotation: u8) {
+        self.handles.clear();
+        self.empty.clear();
+        let Some(air) = self.air else { return };
         for entry in entries {
-            let found = self.lookup(entry);
-            let block = self.turn(found, rotation);
-            // SAFETY: a block the game gave for this world, or null, and the block type it gave for that block
-            let (graphics, passes, double_sided) = unsafe {
-                let passes = if block.is_null() {
-                    LayerPasses::default()
-                } else {
-                    let extra = self.game.extra_render_layers(self.game.block_type(block));
-                    LayerPasses::new(self.game.render_layer(block), extra)
-                };
-                let graphics = self.game.graphics(block);
-                (graphics, passes, DoubleSided::shape(self.game.block_shape(graphics)))
+            let found = match PaletteBlocks::lookup(blocks, entry) {
+                PaletteLookup::Exact(block) => Some(self.turn(blocks, block, rotation)),
+                PaletteLookup::Default(block) => {
+                    self.default_state_count += 1;
+                    Some(self.turn(blocks, block, rotation))
+                }
+                PaletteLookup::Unknown => {
+                    self.unknown_count += 1;
+                    self.unknown
+                }
             };
-            self.blocks.push(block);
-            self.graphics.push(graphics);
-            self.passes.push(passes);
-            self.double_sided.push(double_sided);
+            let is_air = found.is_none_or(|block| block == air);
+            self.handles.push(found.unwrap_or(air));
+            self.empty.push(is_air);
         }
     }
 
-    /// The block of palette id `id`; null for an empty cell, an id outside the palette or an entry that did not
-    /// resolve at all.
-    pub fn block(&self, id: u16) -> *const c_void {
-        if id == Self::EMPTY {
-            return std::ptr::null();
+    /// The handles of the palette, in palette id order, for the mesher's grid.
+    pub fn handles(&self) -> &[BlockHandle] {
+        &self.handles
+    }
+
+    /// The block of palette id `id`; None for an empty cell, an id outside the palette and an entry that is air.
+    pub fn block(&self, id: u16) -> Option<BlockHandle> {
+        let index = usize::from(id);
+        if id == Self::EMPTY || self.empty.get(index).copied().unwrap_or(true) {
+            return None;
         }
-        self.blocks.get(usize::from(id)).copied().unwrap_or(std::ptr::null())
+        self.handles.get(index).copied()
     }
 
-    /// The graphics of palette id `id`; null where `block` is null.
-    pub fn graphics(&self, id: u16) -> *const c_void {
-        self.graphics.get(usize::from(id)).copied().unwrap_or(std::ptr::null())
-    }
-
-    /// The render layers palette id `id` is tessellated in; the default, one pass on layer 0, where `block` is null.
-    pub fn passes(&self, id: u16) -> LayerPasses {
-        self.passes.get(usize::from(id)).copied().unwrap_or_default()
-    }
-
-    /// Whether palette id `id` is a one-quad shape the ghost draws from both sides; false where `block` is null.
-    pub fn double_sided(&self, id: u16) -> bool {
-        self.double_sided.get(usize::from(id)).copied().unwrap_or(false)
-    }
-
-    pub fn air(&self) -> *const c_void {
-        self.air
-    }
-
-    pub fn air_graphics(&self) -> *const c_void {
-        self.air_graphics
-    }
-
-    pub fn stone(&self) -> *const c_void {
-        self.stone
-    }
-
-    /// The registry, for lookups by name in the joined world.
-    pub fn registry(&self) -> &BlockRegistry {
-        &self.registry
+    /// Whether a palette is resolved for the joined world.
+    pub fn is_resolved(&self) -> bool {
+        !self.handles.is_empty()
     }
 
     /// The entries that fell back to the unknown block since the last call, for the report.
@@ -158,28 +106,17 @@ impl BlockResolver {
         std::mem::take(&mut self.default_state_count)
     }
 
-    // name and states first, then the name with its default states, then the game's unknown block
-    fn lookup(&mut self, nbt: &[u8]) -> *const c_void {
-        match self.nbt.lookup(nbt) {
-            NbtLookup::Exact(block) => block,
-            NbtLookup::Default(block) => {
-                self.default_state_count += 1;
-                block
-            }
-            NbtLookup::Unknown => {
-                self.unknown_count += 1;
-                self.unknown
-            }
-        }
-    }
-
-    // the unknown block is never turned
-    #[allow(unsafe_code)]
-    fn turn(&self, block: *const c_void, rotation: u8) -> *const c_void {
-        if block.is_null() || block == self.unknown {
+    // the unknown block is never turned, nor is a block when there is no turn
+    fn turn(&self, blocks: &Blocks, block: BlockHandle, rotation: u8) -> BlockHandle {
+        if rotation == 0 || Some(block) == self.unknown {
             return block;
         }
-        // SAFETY: a block the game gave for this world
-        unsafe { self.game.turn(block, rotation) }
+        blocks.rotated(block, rotation).unwrap_or(block)
+    }
+}
+
+impl Default for BlockResolver {
+    fn default() -> Self {
+        Self::new()
     }
 }

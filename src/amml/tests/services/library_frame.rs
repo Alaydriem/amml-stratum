@@ -1,7 +1,6 @@
 use std::sync::Arc;
 
 use alaydriem_stratum::services::{LibraryFrame, SharedUi};
-use amm_abi::types::AmmLogLevel;
 use amm_client::link::{FrameHandler, FrameInputView, FrameReply};
 use amm_client::test_support::FakeTable;
 use amm_core::structs::frame::{FrameInputData, LayerKind};
@@ -117,9 +116,9 @@ fn action_queue_full_drops_and_logs() {
 
     assert_eq!(dropped, 1);
     assert!(actions.is_empty());
-    let lines = CoreSession::logged("library actions dropped");
+    let lines = session.logged("library actions dropped");
     assert_eq!(lines.len(), 1);
-    assert_eq!(lines[0].level, AmmLogLevel::Warn as u8);
+    assert_eq!(lines[0].level, "warn");
     session.tick(&CoreSession::in_world());
     assert_eq!(shared.snapshot().projects.len(), SharedUi::ACTION_CAPACITY);
 }

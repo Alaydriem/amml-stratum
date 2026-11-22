@@ -51,6 +51,11 @@ impl FrameStatusReader {
         &self.world_key
     }
 
+    // the world key reader, to take the key it chose for the log
+    pub fn world_key_mut(&mut self) -> &mut WorldKeyReader {
+        &mut self.world_key
+    }
+
     // forgets the loaded world, its key and the key logged last
     pub fn reset(&mut self) {
         self.world_key.forget();

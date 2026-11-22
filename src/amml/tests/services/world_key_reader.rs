@@ -1,5 +1,4 @@
 use alaydriem_stratum::services::WorldKeyReader;
-use alaydriem_stratum::types::ConnectionInfo;
 
 use crate::support::FakeWorld;
 
@@ -29,7 +28,7 @@ fn a_remote_connection_is_never_named_by_a_storage_folder() {
 #[test]
 fn a_local_connection_with_no_storage_folder_falls_back_to_the_name() {
     let world = FakeWorld::new();
-    *world.connection.borrow_mut() = Some(FakeWorld::connection(ConnectionInfo::LOCAL, "", "", 0));
+    *world.connection.borrow_mut() = Some(FakeWorld::connection(0, "", "", 0));
 
     assert_eq!(world.key_after(WorldKeyReader::FALLBACK_AFTER_READS - 1), "");
     assert_eq!(world.key_after(WorldKeyReader::FALLBACK_AFTER_READS), "name:Level:14274599075807261974");

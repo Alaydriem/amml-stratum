@@ -1,163 +1,112 @@
-use std::ffi::c_void;
-
-use amml_game::BlockPos;
+use amml_api::{
+    ApiError, BlockHandle, BlockPos, Face as ApiFace, Hud, InventoryMove, LocalPlayer, RequestId, RequestOptions, Vec3,
+};
+use stratum_core::structs::block::Face;
 use stratum_core::structs::easy_place::{Placement, UseCommand};
 
-use crate::easy_place::{StackRequest, UseSignals};
-use crate::game::{GameMode, PlayerInventory, PlayerView};
-use crate::traits::UseCore;
-use crate::types::{PlayerCalls, UseCalls};
+use crate::types::UseOutcome;
 
-// `void HudScreenController::_handleSlotSelection(int slot, ContainerID containerId)`: this, the slot, the container id
-type HandleSlotSelectionFn = unsafe extern "C" fn(*mut c_void, i32, i32);
-
-/// Carries out the command the core gave: selects a hotbar slot through the HUD, places a block through the game mode,
-/// or hands a swap or a pick to the stack request. It decides nothing; a command it cannot carry out (no HUD to select
-/// with, a select the game did not take, a build the game refused) places nothing, and a Place or Select and Place that
-/// placed nothing is reported to the core as not sent. The HUD controller is held from its tick until it is destroyed.
-pub struct UseExecutor {
-    calls: UseCalls,
-    players: PlayerCalls,
-}
+/// Carries out the command the core gave, through the loader: selects a hotbar slot through the HUD, places a block
+/// through the game mode, or asks for a swap or a pick. It decides nothing and holds no lock: `build_at` raises
+/// `BuildBlock` and the block change on the same stack. A command it cannot carry out (a select the game did not take,
+/// a build the game refused) places nothing, and a Place or Select and Place that placed nothing comes back as not
+/// sent.
+pub struct UseExecutor;
 
 impl UseExecutor {
     const HOTBAR_SLOTS: u8 = 9;
-    // a HUD controller not ticked for this long is not used
-    const HUD_FRESH_SECONDS: f64 = 0.5;
-    // ContainerID::Inventory
-    const INVENTORY_CONTAINER: i32 = 0;
-    // HitResultType::Tile
-    const TILE: i32 = 0;
 
-    pub fn new(calls: &UseCalls, players: &PlayerCalls) -> Self {
-        Self { calls: *calls, players: *players }
-    }
-
-    /// Carries out `command`; `palette` gives the block of a palette id, null when there is none.
-    ///
-    /// # Safety
-    /// `client` and `player` must be the live client and its live local player.
-    #[allow(unsafe_code, clippy::too_many_arguments)]
-    pub unsafe fn run(
-        &self,
-        signals: &UseSignals,
-        request: &mut StackRequest,
-        core: &mut dyn UseCore,
-        now: f64,
-        client: *mut c_void,
-        player: *mut c_void,
+    /// Carries out `command`; `pick` is the block of the palette id a Pick names, `counts` the stack counts of the
+    /// inventory the command was decided on.
+    pub fn run(
+        player: &LocalPlayer<'_>,
+        hud: &Hud<'_>,
         command: &UseCommand,
-        palette: &mut dyn FnMut(u16) -> *const c_void,
-    ) {
+        pick: Option<BlockHandle>,
+        counts: &[u8; 36],
+    ) -> UseOutcome {
+        let mut outcome = UseOutcome::default();
         match *command {
             UseCommand::Select { slot, place } => {
-                // SAFETY: forwarded to the caller
-                if !unsafe { self.select(signals, now, player, slot) }
-                    || !unsafe { self.place(signals, player, &place) }
-                {
-                    core.not_sent(place.spot);
+                if !Self::select(player, hud, slot) || !Self::place(player, &place) {
+                    outcome.not_sent = Some(place.spot);
                 }
             }
-            // SAFETY: forwarded to the caller
-            UseCommand::Swap { from, to } => unsafe {
-                request.swap(now, client, player, i32::from(from), i32::from(to))
-            },
-            UseCommand::Pick { palette_id, slot } => {
-                let block = palette(palette_id);
-                // SAFETY: forwarded to the caller; the palette gives null or a block of the world's registry
-                unsafe { request.pick(now, client, player, block, i32::from(slot)) };
+            UseCommand::Swap { from, to } => outcome.request = Some(Self::swap(player, counts, from, to)),
+            UseCommand::Pick { slot, .. } => {
+                let request = match (player.inventory(), pick) {
+                    (Some(inventory), Some(block)) => inventory.request_pick(block, slot),
+                    _ => Err(ApiError::Refused),
+                };
+                outcome.request = Some(request);
             }
             UseCommand::Place(place) => {
-                // SAFETY: forwarded to the caller
-                if !unsafe { self.place(signals, player, &place) } {
-                    core.not_sent(place.spot);
+                if !Self::place(player, &place) {
+                    outcome.not_sent = Some(place.spot);
                 }
             }
             UseCommand::Vanilla | UseCommand::Block => {}
         }
+        outcome
     }
 
-    /// The HUD screen's tick: the controller the hotbar select goes through.
-    pub fn capture_hud(signals: &UseSignals, hud: usize, now: f64) {
-        signals.set_hud(hud, now);
-        signals.clear_no_hud_logged();
+    /// The API face of a core face.
+    pub fn face(face: Face) -> ApiFace {
+        match face {
+            Face::Down => ApiFace::Down,
+            Face::Up => ApiFace::Up,
+            Face::North => ApiFace::North,
+            Face::South => ApiFace::South,
+            Face::West => ApiFace::West,
+            Face::East => ApiFace::East,
+        }
     }
 
-    /// A screen controller is being destroyed; when it is the captured HUD, the HUD is forgotten.
-    pub fn forget_hud(signals: &UseSignals, controller: usize) {
-        signals.forget_hud(controller);
-    }
-
-    /// Forgets the HUD and ends the own-build guard; on mod disable.
-    pub fn reset(signals: &UseSignals) {
-        signals.set_hud(0, 0.0);
-        signals.set_own_build(false);
+    // into an empty hotbar slot the whole stack is placed; otherwise the two stacks swap
+    fn swap(player: &LocalPlayer<'_>, counts: &[u8; 36], from: u8, to: u8) -> Result<RequestId, ApiError> {
+        let inventory = player.inventory().ok_or(ApiError::Refused)?;
+        let count = |slot: u8| counts.get(usize::from(slot)).copied().unwrap_or(0);
+        if count(to) == 0 {
+            let moves = [InventoryMove::Place { from, to, count: count(from) }];
+            return inventory.request_moves(&moves, RequestOptions { hidden_open: true, predict: true });
+        }
+        inventory.request_swap(from, to)
     }
 
     // true when the slot is selected after the call
-    #[allow(unsafe_code)]
-    unsafe fn select(&self, signals: &UseSignals, now: f64, player: *mut c_void, slot: u8) -> bool {
-        // SAFETY: the caller guarantees a live player
-        let Some(inventory) = (unsafe { PlayerInventory::of_player(player, &self.players) }) else { return false };
+    fn select(player: &LocalPlayer<'_>, hud: &Hud<'_>, slot: u8) -> bool {
         if slot >= Self::HOTBAR_SLOTS {
             return false;
         }
-        let (hud, seen) = signals.hud();
-        let fresh = hud != 0 && now - seen < Self::HUD_FRESH_SECONDS;
-        if !fresh || self.calls.handle_slot_selection == 0 {
-            if !signals.take_no_hud_logged() {
-                curia::warn!("easy place select skipped, no HUD", { slot: slot });
-            }
+        if let Err(error) = hud.select_hotbar_slot(slot) {
+            curia::warn!("easy place select skipped", { slot: slot, error: format!("{error:?}") });
             return false;
         }
-        // SAFETY: the entry is the address of _handleSlotSelection
-        let call: HandleSlotSelectionFn = unsafe { std::mem::transmute(self.calls.handle_slot_selection) };
-        // SAFETY: the HUD controller of a tick less than HUD_FRESH_SECONDS ago that no destructor has run for
-        unsafe { call(hud as *mut c_void, i32::from(slot), Self::INVENTORY_CONTAINER) };
-        let selected = inventory.selected().unwrap_or(-1);
-        if selected == i32::from(slot) {
+        let selected = player.inventory().and_then(|inventory| inventory.selected_slot());
+        if selected == Some(slot) {
             return true;
         }
-        curia::warn!("easy place select not taken", { slot: slot, selected: selected });
+        curia::warn!("easy place select not taken", { slot: slot, selected: format!("{selected:?}") });
         false
     }
 
     // clicks the neighbour's face that points at the spot, at the point the core chose, the way the game's own use
     // does; true when the game built
-    #[allow(unsafe_code)]
-    unsafe fn place(&self, signals: &UseSignals, player: *mut c_void, place: &Placement) -> bool {
-        // SAFETY: the caller guarantees a live player
-        let Some(game_mode) = (unsafe { GameMode::of_player(player, &self.players, &self.calls) }) else {
-            return false;
-        };
-        // SAFETY: as above
-        let Some(view) = (unsafe { PlayerView::of_player(player, &self.calls, &self.players) }) else { return false };
-        let Some(hit) = view.hit_result() else { return false };
-        let neighbour = BlockPos { x: place.neighbour[0], y: place.neighbour[1], z: place.neighbour[2] };
-        let face = place.face.index() as u8;
-        // SAFETY: the level's live HitResult, which the mirror lays out up to mPos; only those members change, and
-        // they are put back after the build
-        let saved = unsafe {
-            let hit = &mut *hit;
-            let saved = (hit.kind, hit.facing, hit.block, hit.pos);
-            hit.kind = Self::TILE;
-            hit.block = neighbour;
-            hit.facing = face;
-            hit.pos = [
-                neighbour.x as f32 + place.click[0],
-                neighbour.y as f32 + place.click[1],
-                neighbour.z as f32 + place.click[2],
-            ];
-            saved
-        };
-        signals.set_own_build(true);
-        let built = game_mode.build_block(&neighbour, face, GameMode::MAIN_HAND, signals.sim_tick());
-        signals.set_own_build(false);
-        // SAFETY: as above
-        unsafe {
-            let hit = &mut *hit;
-            (hit.kind, hit.facing, hit.block, hit.pos) = saved;
+    fn place(player: &LocalPlayer<'_>, place: &Placement) -> bool {
+        let Some(game_mode) = player.game_mode() else { return false };
+        let [x, y, z] = place.neighbour;
+        let click = Vec3 { x: x as f32 + place.click[0], y: y as f32 + place.click[1], z: z as f32 + place.click[2] };
+        match game_mode.build_at(BlockPos { x, y, z }, Self::face(place.face), click) {
+            Ok(true) => {
+                let [sx, sy, sz] = place.spot;
+                curia::info!("easy place placed", { x: sx, y: sy, z: sz });
+                true
+            }
+            Ok(false) => false,
+            Err(error) => {
+                curia::warn!("easy place build refused", { error: format!("{error:?}") });
+                false
+            }
         }
-        built
     }
 }

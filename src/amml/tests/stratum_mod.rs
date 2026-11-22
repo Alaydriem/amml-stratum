@@ -1,210 +1,165 @@
-use std::collections::BTreeSet;
-
 use alaydriem_stratum::StratumMod;
-use alaydriem_stratum::game::ClientLevel;
-use alaydriem_stratum::types::{StratumEntry, StratumFeature};
-use amml_game::{EntryId, EntryNeed, GameError};
+use amm_client::link::LinkUses;
+use amml_api::amml_abi::{
+    AmmlMouseAction, AmmlMouseButton, AmmlOrigin, AmmlThread, MouseInput, WindowFocus, WorldJoined, WorldLeft,
+};
+use amml_api::testing::FakeGame;
+use amml_api::{AmmlMod, BlockPos, Face, Hand};
 
-use crate::support::{FakeGhost, FakeResolver};
+use crate::support::StratumRig;
 
 #[test]
-fn with_every_entry_no_feature_is_off() {
-    let entries = StratumMod::resolve(&FakeResolver::new(&FakeResolver::values())).unwrap();
-
-    assert!(StratumMod::off_lines(&entries).is_empty());
+fn the_uses_block_has_every_row_the_manager_link_needs() {
+    assert_eq!(LinkUses::check(&StratumMod::USES), Ok(()));
 }
 
 #[test]
-fn every_entry_is_asked_for_once_per_need() {
-    let wanted = StratumMod::wanted();
+fn the_checked_in_manifest_holds_the_uses_block_of_the_mod() {
+    let manifest = include_str!("../amml.hcl");
 
-    for (index, (id, need)) in wanted.iter().enumerate() {
-        let again = wanted[index + 1..].iter().any(|(other, other_need)| other == id && other_need == need);
-        assert!(!again, "{} twice for the same need", id.as_str());
+    assert_eq!(StratumMod::USES.write_into(manifest), manifest);
+}
+
+#[test]
+fn every_row_of_the_uses_block_is_required() {
+    assert!(StratumMod::USES.rows().iter().all(|row| row.required != 0));
+}
+
+#[test]
+fn enable_logs_one_feature_line_for_each_feature() {
+    let rig = StratumRig::new();
+
+    for feature in StratumMod::FEATURES {
+        assert_eq!(rig.lines(&format!("info feature on name={feature}")).len(), 1, "{feature}");
     }
 }
 
 #[test]
-fn an_entry_two_features_share_is_asked_for_by_each_feature() {
-    let wanted = StratumMod::wanted();
+fn the_core_starts_once_at_the_first_tick_after_the_link_connects() {
+    let rig = StratumRig::new();
+    rig.ready();
+    assert!(rig.lines("stratum linked").is_empty(), "no core starts in enable");
 
-    for shared in [StratumEntry::BLOCK_TYPE_FULL_NAME, StratumEntry::BLOCK_SOURCE_GET_CHUNK] {
-        let needs: Vec<_> = wanted.iter().filter(|(id, _)| *id == shared).map(|(_, need)| *need).collect();
-        assert_eq!(needs.len(), 2, "{}", shared.as_str());
-        assert!(needs.iter().all(|need| matches!(need, EntryNeed::Optional { .. })));
+    for _ in 0..3 {
+        rig.tick();
     }
+
+    assert_eq!(rig.lines("stratum linked").len(), 1);
 }
 
 #[test]
-fn a_missing_build_entry_turns_only_the_build_off_and_the_log_says_build_is_off() {
-    for missing in [
-        StratumEntry::PLAYER_GET_PLAYER_PERMISSION_LEVEL,
-        StratumEntry::LEVEL_DATA_COMMANDS_ENABLED,
-        StratumEntry::COMMAND_REQUEST_PACKET_M_COMMAND,
-        StratumEntry::COMMAND_REQUEST_PACKET_SIZE,
-    ] {
-        let values: Vec<_> = FakeResolver::values().into_iter().filter(|(id, _)| *id != missing).collect();
+fn a_world_join_is_logged_with_its_epoch() {
+    let rig = StratumRig::new();
 
-        let entries = StratumMod::resolve(&FakeResolver::new(&values)).unwrap();
-        let lines = StratumMod::off_lines(&entries);
+    rig.game.raise(&mut WorldJoined { header: FakeGame::header::<WorldJoined>(), epoch: 4 });
 
-        assert_eq!(lines.len(), 1, "{lines:?}");
-        assert!(lines[0].starts_with(&format!("{} is off", StratumFeature::BUILD)), "{lines:?}");
-        assert!(lines[0].contains(missing.as_str()), "{lines:?}");
+    assert_eq!(rig.lines("info world joined epoch=4").len(), 1);
+}
+
+#[test]
+fn a_local_world_is_keyed_by_its_storage_folder_and_the_build_conditions_are_logged_in_order() {
+    let rig = StratumRig::new();
+    rig.ready();
+
+    for _ in 0..3 {
+        rig.tick();
     }
+
+    let key = rig.lines("world key kind=local");
+    assert_eq!(key.len(), 1, "{:?}", rig.game.logs());
+    assert!(key[0].contains(&format!("key=local:{}", StratumRig::FOLDER)), "{key:?}");
+    assert_eq!(rig.lines("info build conditions local=true cheats=true operator=true creative=true").len(), 1);
+    let conditions = rig.lines("info build conditions local=true");
+    assert!(conditions[0].contains("connection=Some(Local)"), "{conditions:?}");
+    assert!(conditions[0].contains("game_type=Some(Creative)"), "{conditions:?}");
+    assert!(conditions[0].contains("permission_level=Some(Operator)"), "{conditions:?}");
 }
 
 #[test]
-fn a_missing_block_type_name_turns_the_skulls_and_the_build_off_and_nothing_else() {
-    let values: Vec<_> =
-        FakeResolver::values().into_iter().filter(|(id, _)| *id != StratumEntry::BLOCK_TYPE_FULL_NAME).collect();
+fn the_focus_loss_reaches_the_game_while_no_picker_is_open() {
+    let rig = StratumRig::new();
+    rig.ready();
+    rig.tick();
 
-    let entries = StratumMod::resolve(&FakeResolver::new(&values)).unwrap();
-    let mut off: Vec<&str> = entries.off_features().into_iter().map(|(feature, _)| feature).collect();
-    off.sort_unstable();
-
-    assert_eq!(off, vec![StratumFeature::BUILD, StratumFeature::SKULLS]);
+    assert!(!rig.game.raise_app_focus_lost());
 }
 
 #[test]
-fn a_missing_connection_getter_turns_only_the_connection_off_with_one_line() {
-    let values: Vec<_> = FakeResolver::values()
-        .into_iter()
-        .filter(|(id, _)| *id != StratumEntry::CLIENT_INSTANCE_GET_GAME_CONNECTION_INFO)
-        .collect();
+fn a_build_on_the_server_thread_or_of_the_mod_itself_is_never_cancelled() {
+    let rig = StratumRig::new();
+    rig.ready();
+    rig.tick();
+    let pos = BlockPos { x: 1, y: 64, z: 1 };
 
-    let entries = StratumMod::resolve(&FakeResolver::new(&values)).unwrap();
-    let lines = StratumMod::off_lines(&entries);
+    let server =
+        rig.game.raise_build_block(AmmlThread::SERVER, AmmlOrigin::GAME, pos, Face::Up, Hand::Main, true, false);
+    let own = rig.game.raise_build_block(AmmlThread::GAME, AmmlOrigin::THIS_MOD, pos, Face::Up, Hand::Main, true, true);
+    let game = rig.game.raise_build_block(AmmlThread::GAME, AmmlOrigin::GAME, pos, Face::Up, Hand::Main, true, true);
 
-    assert_eq!(lines.len(), 1);
-    assert!(lines[0].starts_with(&format!("{} is off", StratumFeature::CONNECTION)), "{lines:?}");
+    assert!(!server);
+    assert!(!own);
+    assert!(!game, "no hold blocks the game's build");
 }
 
 #[test]
-fn a_missing_storage_constructor_turns_only_the_world_folder_off() {
-    let values: Vec<_> =
-        FakeResolver::values().into_iter().filter(|(id, _)| *id != StratumEntry::DB_STORAGE_CTOR).collect();
+fn a_press_with_no_ghost_goes_to_the_game() {
+    let rig = StratumRig::new();
+    rig.ready();
+    rig.tick();
+    let mut right = MouseInput {
+        header: FakeGame::header::<MouseInput>(),
+        action: AmmlMouseAction::BUTTON,
+        button: AmmlMouseButton::RIGHT,
+        down: 1,
+        _reserved: 0,
+        x: 0,
+        y: 0,
+        dx: 0,
+        dy: 0,
+        notches: 0.0,
+    };
+    rig.game.raise(&mut right);
+    rig.tick();
 
-    let entries = StratumMod::resolve(&FakeResolver::new(&values)).unwrap();
-    let lines = StratumMod::off_lines(&entries);
-
-    assert_eq!(lines.len(), 1);
-    assert!(lines[0].starts_with(&format!("{} is off", StratumFeature::WORLD_FOLDER)), "{lines:?}");
+    assert!(!rig.game.raise_use_pressed());
+    assert!(rig.game.builds().is_empty());
 }
 
 #[test]
-fn a_missing_world_key_or_status_entry_refuses_the_enable() {
-    for missing in [StratumEntry::LEVEL_GET_LEVEL_SEED64, StratumEntry::MINECRAFT_GAME_ON_APP_FOCUS_LOST] {
-        let values: Vec<_> = FakeResolver::values().into_iter().filter(|(id, _)| *id != missing).collect();
+fn a_world_leave_and_a_focus_loss_are_taken_without_a_core() {
+    let rig = StratumRig::new();
 
-        let result = StratumMod::resolve(&FakeResolver::new(&values));
+    rig.game.raise(&mut WindowFocus {
+        header: FakeGame::header::<WindowFocus>(),
+        gained: 0,
+        replayed: 0,
+        _reserved: [0; 2],
+    });
+    rig.game.raise(&mut WorldLeft { header: FakeGame::header::<WorldLeft>(), epoch: 1 });
 
-        assert!(matches!(result, Err(GameError::MissingEntry { id }) if id == missing.as_str()));
+    assert!(rig.lines("panic").is_empty());
+}
+
+#[test]
+fn a_server_world_is_keyed_by_the_address_the_player_typed_not_the_resolved_host() {
+    use amml_api::testing::FakeClient;
+    use amml_api::{Connection, ConnectionKind, WorldInfo};
+    let rig = StratumRig::new();
+    rig.game.offer::<amml_api::amml_abi::ServerJoinStarting>();
+    rig.game.raise_server_join_starting("203.0.113.7", "play.example.net", "Example", 19132, false);
+    let info = WorldInfo {
+        storage_folder: None,
+        connection: Some(Connection { kind: ConnectionKind::Remote, host: "203.0.113.7".to_string(), port: 19132 }),
+        ..StratumRig::client().world_info.unwrap()
+    };
+    rig.game.set_client(FakeClient { world_info: Some(info), ..StratumRig::client() });
+    rig.ready();
+
+    for _ in 0..=alaydriem_stratum::services::WorldKeyReader::SERVER_STABLE_READS {
+        rig.tick();
     }
-}
 
-#[test]
-fn a_level_name_anchor_that_does_not_fit_is_refused() {
-    let entries =
-        StratumMod::resolve(&FakeResolver::new(&FakeResolver::with(StratumEntry::LEVEL_DATA_LEVEL_NAME, 0x2B8)))
-            .unwrap();
-    let fitting = StratumMod::resolve(&FakeResolver::new(&FakeResolver::values())).unwrap();
-
-    assert!(ClientLevel::check(&entries).is_err());
-    assert!(ClientLevel::check(&fitting).is_ok());
-}
-
-#[test]
-fn a_2660_level_name_anchor_fits_the_second_mirror() {
-    let entries =
-        StratumMod::resolve(&FakeResolver::new(&FakeResolver::with(StratumEntry::LEVEL_DATA_LEVEL_NAME, 0x2B0)))
-            .unwrap();
-
-    assert!(ClientLevel::check(&entries).is_ok());
-}
-
-#[test]
-fn a_missing_ghost_entry_refuses_the_enable() {
-    let values: Vec<_> =
-        FakeResolver::values().into_iter().filter(|(id, _)| *id != StratumEntry::TESSELLATOR_END).collect();
-
-    let result = StratumMod::resolve(&FakeResolver::new(&values));
-
-    assert!(matches!(result, Err(GameError::MissingEntry { id }) if id == "Tessellator.end"));
-}
-
-#[test]
-fn amml_hcl_lists_every_entry_the_mod_asks_for() {
-    let text = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/amml.hcl")).unwrap();
-    let manifest: hcl::Value = hcl::from_str(&text).unwrap();
-    let entries = manifest.as_object().and_then(|object| object.get("entries")).and_then(hcl::Value::as_array).unwrap();
-    let listed: BTreeSet<String> = entries.iter().map(|entry| entry.as_str().unwrap().to_string()).collect();
-    let wanted: BTreeSet<String> = StratumMod::wanted().iter().map(|(id, _)| id.as_str().to_string()).collect();
-
-    assert_eq!(listed, wanted);
-}
-
-#[test]
-fn with_every_entry_the_easy_place_calls_accept_them_and_no_feature_is_named_off() {
-    let entries = StratumMod::resolve(&FakeResolver::new(&FakeResolver::values())).unwrap();
-
-    assert!(StratumMod::easy_place_check(&entries).is_ok());
-    assert_eq!(StratumMod::features_line(&entries), "features off: none");
-}
-
-#[test]
-fn a_missing_easy_place_entry_refuses_the_enable() {
-    for missing in [StratumEntry::GAME_MODE_BUILD_BLOCK, StratumEntry::PACKET_READ, EntryId::ACTOR_GET_ATTACH_POS] {
-        let values: Vec<_> = FakeResolver::values().into_iter().filter(|(id, _)| *id != missing).collect();
-
-        let result = StratumMod::resolve(&FakeResolver::new(&values));
-
-        assert!(
-            matches!(result, Err(GameError::MissingEntry { ref id }) if id == missing.as_str()),
-            "{}",
-            missing.as_str()
-        );
-    }
-}
-
-#[test]
-fn every_easy_place_entry_is_required() {
-    let wanted = StratumMod::wanted();
-
-    for id in StratumEntry::EASY_PLACE {
-        let need = wanted.iter().find(|(wanted, _)| *wanted == id).map(|(_, need)| *need);
-        assert_eq!(need, Some(EntryNeed::Required), "{}", id.as_str());
-    }
-}
-
-#[test]
-fn a_game_mode_mirror_that_does_not_fit_refuses_the_enable() {
-    let entries =
-        StratumMod::resolve(&FakeResolver::new(&FakeResolver::with(StratumEntry::GAME_MODE_PLAYER, 0x10))).unwrap();
-
-    let error = StratumMod::easy_place_check(&entries).expect_err("the use calls refuse the mirror");
-
-    assert!(error.to_string().contains(StratumEntry::GAME_MODE_PLAYER.as_str()), "{error}");
-    assert!(StratumMod::off_lines(&entries).is_empty());
-}
-
-#[test]
-fn a_missing_water_getter_turns_only_the_water_tint_off_and_the_ghost_calls_still_build() {
-    let values: Vec<_> = FakeResolver::values()
-        .into_iter()
-        .filter(|(id, _)| *id != StratumEntry::BIOME_COLOR_SAMPLING_GET_WATER_COLOR)
-        .collect();
-
-    let entries = StratumMod::resolve(&FakeResolver::new(&values)).unwrap();
-    let lines = StratumMod::off_lines(&entries);
-    let calls = alaydriem_stratum::types::GhostCalls::new(&entries, FakeGhost::heap_new, FakeGhost::heap_delete);
-
-    assert_eq!(lines.len(), 1);
-    assert!(lines[0].starts_with(&format!("{} is off", StratumFeature::WATER_TINT)), "{lines:?}");
-    let calls = calls.unwrap();
-    assert_eq!(
-        (calls.get_chunk_slot, calls.level_chunk_get_biome, calls.biome_get_water_color),
-        (0, 0, 0),
-        "the three water calls go off together"
-    );
+    let key = rig.lines("world key kind=server");
+    assert_eq!(key.len(), 1, "{:?}", rig.game.logs());
+    assert!(key[0].contains("key=server:play.example.net:19132"), "{key:?}");
 }

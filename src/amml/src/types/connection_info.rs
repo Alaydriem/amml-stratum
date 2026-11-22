@@ -1,14 +1,18 @@
-// The parts of the game's Social::GameConnectionInfo the world key reads.
+use amml_api::{Connection, ConnectionKind};
+
+// The parts of the world's connection the world key reads: the kind, the resolved host and the port the loader reads
+// from the game, and the address as the player typed it, from the server join that started the world (empty for a
+// world no server join started).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ConnectionInfo {
-    // the game's Social::ConnectionType: -1 undefined, 0 local, higher values are network connections
-    pub connection_type: i16,
+    pub kind: ConnectionKind,
     pub host: String,
     pub url: String,
-    pub port: i32,
+    pub port: u16,
 }
 
-impl ConnectionInfo {
-    pub const UNDEFINED: i16 = -1;
-    pub const LOCAL: i16 = 0;
+impl From<Connection> for ConnectionInfo {
+    fn from(connection: Connection) -> Self {
+        Self { kind: connection.kind, host: connection.host, url: String::new(), port: connection.port }
+    }
 }

@@ -3,7 +3,6 @@ use std::time::{Duration, Instant};
 
 use alaydriem_stratum::services::ManagerSession;
 use alaydriem_stratum::types::PathList;
-use amm_abi::types::AmmLogLevel;
 use amm_client::test_support::FakeTable;
 use amm_core::structs::descriptor::Capability;
 use stratum_core::config::ImportSettings;
@@ -74,10 +73,11 @@ fn panic_under_the_tick_lock_fails_later_ticks_and_gives_the_ui_back() {
     // the lock the panic poisoned turns later ticks into failures, logged once
     assert_eq!(session.tick(&CoreSession::in_world()), None);
     assert_eq!(session.tick(&CoreSession::in_world()), None);
-    assert_eq!(CoreSession::logged("poisoned").len(), 1);
+    assert_eq!(session.logged("poisoned").len(), 1);
     // the first call that finds the lock poisoned closes the library and gives its leases back
     assert!(!session.shared().is_shown());
-    assert_eq!(FakeTable::with(|state| state.released.clone()), [Capability::Input, Capability::Overlay]);
+    assert_eq!(FakeTable::with(|state| state.released.clone()), [Capability::Overlay]);
+    assert!(!session.input_held());
 }
 
 #[test]
@@ -113,9 +113,9 @@ fn picked_paths_past_the_bound_are_left_out_and_the_queue_refuses_the_rest() {
 
     assert_eq!(Picks::picked(&session, names), Some(()));
 
-    let lines = CoreSession::logged("picked files past the import queue were left out");
+    let lines = session.logged("picked files past the import queue were left out");
     assert_eq!(lines.len(), 1);
-    assert_eq!(lines[0].level, AmmLogLevel::Warn as u8);
+    assert_eq!(lines[0].level, "warn");
     // the worker takes the default queue of 64, plus at most a full result queue and one request in hand while
     // it runs, and refuses the rest, which the library shows as a full queue
     let queue = ImportSettings::default().queue;
@@ -148,9 +148,9 @@ fn a_failed_import_is_logged_with_the_file_and_the_reason() {
         std::thread::sleep(Duration::from_millis(10));
     }
 
-    let lines = CoreSession::logged("structure import failed");
+    let lines = session.logged("structure import failed");
     assert_eq!(lines.len(), 1);
-    assert_eq!(lines[0].level, AmmLogLevel::Warn as u8);
+    assert_eq!(lines[0].level, "warn");
     assert!(lines[0].fields_json.contains("junk.mcstructure"));
     assert!(lines[0].fields_json.contains("reason"));
 }

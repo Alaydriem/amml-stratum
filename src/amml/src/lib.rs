@@ -1,14 +1,12 @@
-//! @alaydriem/stratum as an AMML mod: the lifecycle, the per-tick reader and world key, the import picker, the core
-//! services moved from the C ABI crate, the game layout mirrors and the wrappers of the ghost render path, and, with
-//! the `gate` feature, the in-game check that builds and draws one mesh and looks up one block by NBT.
+//! @alaydriem/stratum as an AMML mod on the stable mod API: the lifecycle and listeners, the per-tick reader and world
+//! key, the import picker, the core services, the ghost render through the loader's block mesher and world canvas,
+//! easy place and the build through the loader's player, inventory and command calls, and, with the `gate` feature,
+//! the in-game proof of those calls.
 
 #![deny(unsafe_code)]
 
 pub mod build;
-pub mod detours;
 pub mod easy_place;
-pub mod errors;
-pub mod game;
 pub mod ghost;
 pub mod services;
 pub mod stratum_mod;
@@ -17,4 +15,4 @@ pub mod types;
 
 pub use stratum_mod::StratumMod;
 
-amml_sdk::amml_mod!(StratumMod);
+amml_api::amml_mod!(StratumMod);

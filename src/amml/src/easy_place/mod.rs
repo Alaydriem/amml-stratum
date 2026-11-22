@@ -1,25 +1,20 @@
-//! Easy place: the use calls of a held use key, the probe, spot and inventory reads they make, the commands they carry
-//! out, and the item stack requests that move a stack into the hotbar, written as the game's own inventory screen
-//! writes them.
+//! Easy place: the use calls of a held use key, the probe, spot and inventory reads they make, and the loader calls
+//! that carry them out: the hotbar select, the build, and the inventory swap or creative pick.
 
 pub mod inventory_reader;
 pub mod probe_reader;
-pub mod request_encoder;
-pub mod slot_ref;
+pub mod request_tracker;
 pub mod spot_reader;
-pub mod stack_request;
+pub mod use_cycle;
 pub mod use_driver;
 pub mod use_executor;
-pub mod use_hooks;
-pub mod use_signals;
+pub mod use_flags;
 
 pub use inventory_reader::InventoryReader;
 pub use probe_reader::ProbeReader;
-pub use request_encoder::RequestEncoder;
-pub use slot_ref::SlotRef;
+pub use request_tracker::RequestTracker;
 pub use spot_reader::SpotReader;
-pub use stack_request::StackRequest;
+pub use use_cycle::UseCycle;
 pub use use_driver::UseDriver;
 pub use use_executor::UseExecutor;
-pub use use_hooks::UseHooks;
-pub use use_signals::UseSignals;
+pub use use_flags::UseFlags;

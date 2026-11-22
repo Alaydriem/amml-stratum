@@ -1,176 +1,210 @@
-use std::sync::atomic::Ordering;
+use amml_api::testing::FakeCanvas;
+use amml_api::{BlockEntityCamera, Vec3};
+use stratum_core::structs::ghost::{ChestPair, GhostBlockEntity, GhostReport, SkullPose};
 
-use alaydriem_stratum::game::TessellatorLayout;
-use stratum_core::structs::ghost::{GhostDraw, GhostJob, GhostJobMode};
+use crate::support::RenderRig;
 
-use crate::support::fake_ghost::{
-    BEGIN_CALLS, BT_EVENTS, CLEAR_CALLS, CLEAR_KEEPS_BEGIN, CLEARS_CLOSED, END_CALLS, EXTRA_LAYER_MASK, EXTRA_LAYERS,
-    MESH_DTOR_CALLS, MESH_LIVE, NBT_STATE, RENDER_LAYER, RENDERED, TESSELLATE_CALLS, TESSELLATE_FAIL_AT,
-    TESSELLATED_LAYERS,
-};
-use crate::support::{FakeGhost, GhostRig};
-
-const STONE: &str = "minecraft:stone";
-
-// a rig in world A with one frame of `jobs` and `draws` published and run
-fn rig_with(jobs: Vec<GhostJob>, draws: Vec<GhostDraw>) -> GhostRig {
-    let mut rig = GhostRig::new();
-    let mut frame = GhostRig::ghost_frame(1, 1, &[STONE]);
-    frame.jobs = jobs;
-    frame.draws = draws;
-    rig.publish(&frame);
-    rig.frame(Some(GhostRig::REGION_A));
-    rig
+fn reports(rig: &RenderRig) -> Vec<GhostReport> {
+    let mut seen = Vec::new();
+    rig.ghost.drain(|report| seen.push(report.clone()));
+    seen
 }
 
-// every begin was closed by an end, or by a clear that closed it
-pub fn assert_paired(rig: &GhostRig) {
-    let closed = FakeGhost::count(&END_CALLS) + FakeGhost::count(&CLEARS_CLOSED);
-    assert_eq!(FakeGhost::count(&BEGIN_CALLS), closed, "every begin has its end");
-    assert!(!rig.tessellator.view::<TessellatorLayout>().tessellating, "the tessellator is left free");
+fn canvas() -> FakeCanvas {
+    FakeCanvas { camera_position: Some(Vec3 { x: 0.0, y: 70.0, z: 0.0 }), ..FakeCanvas::default() }
 }
 
 #[test]
-fn a_normal_build_pairs_every_begin_with_an_end_and_keeps_the_mesh() {
-    let rig = rig_with(vec![GhostRig::job(0, 1, 0, [0, 64, 0])], Vec::new());
+fn a_job_is_built_with_the_mesher_and_drawn_one_cell_back_at_its_origin() {
+    let rig = RenderRig::new();
+    rig.ghost.publish(&RenderRig::frame(&["minecraft:stone"], Vec::new()));
+    let canvas = canvas();
 
-    assert_paired(&rig);
-    // the winding probe's mesh is dropped at once; the job's mesh is kept in its slot
-    assert_eq!(FakeGhost::count(&MESH_LIVE), 1);
-    let reports = rig.reports();
-    let built: Vec<_> = reports.iter().flat_map(|report| report.built.iter()).collect();
+    rig.render(&canvas);
+
+    let calls = canvas.calls.borrow().clone();
+    assert!(calls.iter().any(|call| call == "mesher build cells=1 quads=6"), "{calls:?}");
+    let draws: Vec<_> = calls.iter().filter(|call| call.starts_with("draw ")).collect();
+    assert_eq!(draws.len(), 1, "{calls:?}");
+    assert!(draws[0].ends_with(" 4 63 4 yaw=0"), "{calls:?}");
+    let built: Vec<_> = reports(&rig).into_iter().flat_map(|report| report.built).collect();
     assert_eq!(built.len(), 1);
     assert!(built[0].ok);
-    assert_eq!(built[0].bytes, 4 * 20, "one quad at the measured 20 GPU bytes per vertex");
+    assert_eq!(built[0].bytes, 6 * 4 * 20);
 }
 
 #[test]
-fn a_two_pass_cell_tessellates_twice_with_each_layer() {
-    EXTRA_LAYER_MASK.store(EXTRA_LAYERS, Ordering::SeqCst);
+fn a_slot_outside_the_clip_matrix_is_culled_and_not_drawn() {
+    let rig = RenderRig::new();
+    rig.ghost.publish(&RenderRig::frame(&["minecraft:stone"], Vec::new()));
+    // every point lands at clip x = 10 with w = 1: beyond the right plane
+    let mut clip = [[0.0; 4]; 4];
+    clip[3][0] = 10.0;
+    clip[3][3] = 1.0;
+    let canvas = FakeCanvas { clip_matrix: Some(clip), ..canvas() };
 
-    let rig = rig_with(vec![GhostRig::job(0, 1, 0, [0, 64, 0])], Vec::new());
+    rig.render(&canvas);
 
-    // call 1 is the winding probe at the join; the job's one cell is tessellated on its main layer, then on Opaque
-    let layers = TESSELLATED_LAYERS.lock().unwrap().clone();
-    assert_eq!(layers[1..], [i32::from(RENDER_LAYER), 5]);
-    let reports = rig.reports();
-    let built: Vec<_> = reports.iter().flat_map(|report| report.built.iter()).collect();
-    assert!(built[0].ok);
-    assert_eq!(built[0].bytes, 2 * 4 * 20, "one quad per pass");
-    assert_paired(&rig);
+    assert!(!canvas.calls.borrow().iter().any(|call| call.starts_with("draw ")));
+    assert_eq!(reports(&rig).iter().map(|report| report.culled).sum::<u32>(), 1);
 }
 
 #[test]
-fn a_build_that_fails_part_way_still_ends_the_begin() {
-    // call 1 is the winding probe at the join; calls 2 to 4 are the job's three cells, and the second fails part way
-    TESSELLATE_FAIL_AT.store(3, Ordering::SeqCst);
-    let mut job = GhostRig::job(0, 1, 0, [0, 64, 0]);
-    job.dims = [3, 1, 1];
-    job.slot_size = [3, 1, 1];
-    job.cells = vec![u16::MAX; 5 * 3 * 3];
-    // the padded grid is 5 x 3 x 3, X fastest, then Z, then Y; the cells sit at y 1, z 1
-    for x in 1..4 {
-        job.cells[(3 + 1) * 5 + x] = 0;
+fn the_palette_is_resolved_once_per_palette_and_an_unknown_name_is_counted() {
+    let rig = RenderRig::new();
+    rig.ghost.publish(&RenderRig::frame(&["minecraft:stone", "minecraft:not_a_block"], Vec::new()));
+
+    rig.render(&canvas());
+    rig.ghost.publish(&RenderRig::repeat());
+    rig.render(&canvas());
+
+    let seen = reports(&rig);
+    assert_eq!(seen.iter().filter(|report| report.palette_resolved).count(), 1);
+    assert_eq!(seen.iter().map(|report| report.unknown_blocks).sum::<u32>(), 1);
+}
+
+#[test]
+fn a_world_leave_forgets_the_meshes_the_loader_freed() {
+    let rig = RenderRig::new();
+    rig.ghost.publish(&RenderRig::frame(&["minecraft:stone"], Vec::new()));
+    rig.render(&canvas());
+
+    let held = rig.renderer.lock().unwrap().world_left(&rig.game.ctx().block_entities());
+
+    assert_eq!(held, 1);
+    assert_eq!(rig.renderer.lock().unwrap().meshes(), 0);
+}
+
+#[test]
+fn a_stale_mesh_drops_the_slots_and_asks_core_to_build_again() {
+    let rig = RenderRig::new();
+    rig.ghost.publish(&RenderRig::frame(&["minecraft:stone"], Vec::new()));
+    rig.render(&canvas());
+    reports(&rig);
+
+    rig.game.leave_mesh_world();
+    rig.ghost.publish(&RenderRig::repeat());
+    rig.render(&canvas());
+
+    assert_eq!(rig.renderer.lock().unwrap().meshes(), 0);
+    assert!(reports(&rig).iter().any(|report| report.world_reset));
+}
+
+#[test]
+fn a_large_chest_lead_is_made_as_a_pair_and_drawn_in_the_player_pass_only() {
+    let rig = RenderRig::new();
+    let lead = GhostBlockEntity::new(13, GhostBlockEntity::NONE, Some(ChestPair::PlusX), None);
+    rig.ghost.publish(&RenderRig::frame(&["minecraft:chest"], vec![lead]));
+    rig.render(&canvas());
+
+    let other = rig.pass(BlockEntityCamera::Other);
+    let player = rig.pass(BlockEntityCamera::Player);
+
+    assert_eq!((other, player), (0, 1));
+    let calls = rig.game.block_entities().calls();
+    assert!(calls.iter().any(|call| call == "create kind=chest nbt=0 pair=1,0,0"), "{calls:?}");
+    assert!(calls.iter().any(|call| call.starts_with("draw ") && call.ends_with(" 5,64,5")), "{calls:?}");
+}
+
+#[test]
+fn a_floor_skull_is_made_with_its_turn_in_sixteenths() {
+    let rig = RenderRig::new();
+    let skull = GhostBlockEntity::new(13, GhostBlockEntity::NONE, None, Some(SkullPose::new(1, 90.0)));
+    rig.ghost.publish(&RenderRig::frame(&["minecraft:skeleton_skull"], vec![skull]));
+    rig.render(&canvas());
+
+    rig.pass(BlockEntityCamera::Player);
+
+    let calls = rig.game.block_entities().calls();
+    assert!(calls.iter().any(|call| call.starts_with("create kind=skull") && call.ends_with("skull=1,4")), "{calls:?}");
+}
+
+#[test]
+fn the_ghost_of_one_key_is_made_once_across_passes() {
+    let rig = RenderRig::new();
+    let lead = GhostBlockEntity::new(13, GhostBlockEntity::NONE, Some(ChestPair::PlusX), None);
+    rig.ghost.publish(&RenderRig::frame(&["minecraft:chest"], vec![lead]));
+    rig.render(&canvas());
+
+    for _ in 0..3 {
+        rig.ghost.publish(&RenderRig::repeat());
+        rig.render(&canvas());
+        rig.pass(BlockEntityCamera::Player);
     }
 
-    let rig = rig_with(vec![job], Vec::new());
-
-    assert_eq!(FakeGhost::count(&TESSELLATE_CALLS), 4);
-    assert_paired(&rig);
-    let built: Vec<_> = rig.reports().into_iter().flat_map(|report| report.built).collect();
-    assert_eq!(built.len(), 1, "the job is answered");
-    assert_eq!(built[0].bytes, 11 * 20, "the vertices the game wrote, the cut quad too");
+    let creates = rig.game.block_entities().calls().into_iter().filter(|call| call.starts_with("create")).count();
+    assert_eq!(creates, 1);
+    assert_eq!(rig.renderer.lock().unwrap().block_entities(), 1);
 }
 
 #[test]
-fn a_group_part_whose_clear_leaves_the_begin_open_is_ended() {
-    CLEAR_KEEPS_BEGIN.store(true, Ordering::SeqCst);
+fn a_world_whose_air_is_found_late_is_tried_again_and_built_once_found() {
+    use amml_api::testing::{FakeClient, FakeWorld};
+    let rig = RenderRig::new();
+    let found = crate::support::StratumRig::world();
+    rig.game.set_client(FakeClient {
+        local_player: true,
+        world_active: true,
+        world: Some(FakeWorld::default()),
+        ..FakeClient::default()
+    });
+    rig.ghost.publish(&RenderRig::frame(&["minecraft:stone"], Vec::new()));
+    rig.render(&canvas());
+    assert_eq!(rig.renderer.lock().unwrap().meshes(), 0);
+    reports(&rig);
 
-    let rig = rig_with(vec![GhostRig::group_job(0, 1, GhostJobMode::Append, 7, 0)], Vec::new());
+    rig.game.set_client(FakeClient {
+        local_player: true,
+        world_active: true,
+        world: Some(found),
+        ..FakeClient::default()
+    });
+    for _ in 0..60 {
+        rig.ghost.publish(&RenderRig::repeat());
+        rig.render(&canvas());
+    }
+    assert!(reports(&rig).iter().any(|report| report.world_reset), "core is asked for a new generation");
+    let mut again = RenderRig::frame(&["minecraft:stone"], Vec::new());
+    again.generation = 2;
+    rig.ghost.publish(&again);
+    rig.render(&canvas());
 
-    assert_eq!(FakeGhost::count(&CLEAR_CALLS), 1);
-    assert_paired(&rig);
-    assert_eq!(FakeGhost::count(&MESH_LIVE), 0, "the end after the clear makes a mesh that is dropped at once");
+    assert_eq!(rig.renderer.lock().unwrap().meshes(), 1);
 }
 
 #[test]
-fn a_group_of_two_parts_uploads_one_mesh_and_frees_the_group_buffer() {
-    let mut rig = rig_with(vec![GhostRig::group_job(0, 1, GhostJobMode::Append, 7, 0)], Vec::new());
-    let mut frame = GhostRig::ghost_frame(1, 1, &[STONE]);
-    frame.palette = None;
-    frame.jobs = vec![GhostRig::group_job(0, 2, GhostJobMode::Finish, 7, 1)];
-    rig.publish(&frame);
+fn a_dimension_change_frees_the_meshes_draws_no_old_ghost_and_asks_core_for_a_new_generation() {
+    let rig = RenderRig::new();
+    let lead = GhostBlockEntity::new(13, GhostBlockEntity::NONE, Some(ChestPair::PlusX), None);
+    rig.ghost.publish(&RenderRig::frame(&["minecraft:chest"], vec![lead]));
+    rig.render(&canvas());
+    reports(&rig);
 
-    rig.frame(Some(GhostRig::REGION_A));
+    rig.renderer.lock().unwrap().dimension_changing();
+    let drawn_before_the_frame = rig.pass(BlockEntityCamera::Player);
+    rig.ghost.publish(&RenderRig::repeat());
+    let canvas = canvas();
+    rig.render(&canvas);
 
-    assert_paired(&rig);
-    assert_eq!(FakeGhost::count(&MESH_LIVE), 1, "the slot holds the group's mesh");
-    let built: Vec<_> = rig.reports().into_iter().flat_map(|report| report.built).collect();
-    assert_eq!(built.iter().map(|entry| (entry.serial, entry.ok)).collect::<Vec<_>>(), [(1, true), (2, true)]);
-    // the finish uploads what the appends collected, one quad: its vertices and its six 32-bit indices
-    assert_eq!(built[1].bytes, 4 * 20 + 6 * 4);
+    assert_eq!(drawn_before_the_frame, 0, "the pass of the changing frame draws no old ghost");
+    assert_eq!(canvas.frees.borrow().len(), 1);
+    assert!(reports(&rig).iter().any(|report| report.world_reset));
 }
 
 #[test]
-fn a_dimension_change_frees_every_slot_through_the_mesh_dtor() {
-    let mut rig = rig_with(vec![GhostRig::job(0, 1, 0, [0, 64, 0]), GhostRig::job(1, 2, 0, [16, 64, 0])], Vec::new());
-    assert_eq!(FakeGhost::count(&MESH_LIVE), 2);
-    let dtors_before = FakeGhost::count(&MESH_DTOR_CALLS);
+fn a_stale_block_entity_ghost_is_made_again_after_core_builds_again() {
+    let rig = RenderRig::new();
+    let lead = GhostBlockEntity::new(13, GhostBlockEntity::NONE, Some(ChestPair::PlusX), None);
+    rig.ghost.publish(&RenderRig::frame(&["minecraft:chest"], vec![lead]));
+    rig.render(&canvas());
+    rig.pass(BlockEntityCamera::Player);
+    reports(&rig);
 
-    // the same world epoch with another region: the player changed dimension
-    rig.frame(Some(GhostRig::REGION_B));
+    rig.game.leave_block_entity_world();
+    rig.pass(BlockEntityCamera::Player);
 
-    assert_eq!(FakeGhost::count(&MESH_LIVE), 0);
-    // two slots, then the new region's winding probe
-    assert_eq!(FakeGhost::count(&MESH_DTOR_CALLS) - dtors_before, 3);
-}
-
-#[test]
-fn the_old_block_tessellator_is_pointed_at_the_live_region_before_it_is_deleted() {
-    let mut rig = rig_with(Vec::new(), Vec::new());
-
-    rig.frame(Some(GhostRig::REGION_B));
-
-    let events = BT_EVENTS.lock().unwrap().clone();
-    assert_eq!(events, [("set_region", GhostRig::REGION_B), ("dtor", GhostRig::REGION_B)]);
-}
-
-#[test]
-fn leaving_the_world_frees_every_slot() {
-    let mut rig = rig_with(vec![GhostRig::job(0, 1, 0, [0, 64, 0])], Vec::new());
-
-    rig.frame(None);
-
-    assert_eq!(FakeGhost::count(&MESH_LIVE), 0);
-}
-
-#[test]
-fn three_slots_draw_farthest_first() {
-    let jobs = vec![
-        GhostRig::job(0, 1, 0, [0, 64, 0]),
-        GhostRig::job(1, 2, 0, [0, 64, 0]),
-        GhostRig::job(2, 3, 0, [0, 64, 0]),
-    ];
-    // slot 1 farthest, then slot 0, then slot 2, from the camera at the origin
-    let draws = vec![GhostRig::draw(0, [20, 0, 0]), GhostRig::draw(1, [0, 0, 50]), GhostRig::draw(2, [3, 0, 0])];
-
-    let _rig = rig_with(jobs, draws);
-
-    // the meshes' serials: 1 is the winding probe, then one per job in slot order
-    assert_eq!(*RENDERED.lock().unwrap(), [3, 2, 4]);
-}
-
-#[test]
-fn every_palette_entry_that_does_not_resolve_counts_once_in_the_report() {
-    NBT_STATE.store(1, Ordering::SeqCst);
-    let mut rig = GhostRig::new();
-    let frame = GhostRig::ghost_frame(1, 1, &["minecraft:not_a_block", "minecraft:also_not", "minecraft:stone"]);
-    rig.publish(&frame);
-
-    rig.frame(Some(GhostRig::REGION_A));
-
-    let reports = rig.reports();
-    let resolved: Vec<_> = reports.iter().filter(|report| report.palette_resolved).collect();
-    assert_eq!(resolved.len(), 1);
-    assert_eq!((resolved[0].unknown_blocks, resolved[0].default_state_blocks), (2, 1));
+    assert_eq!(rig.renderer.lock().unwrap().block_entities(), 0, "the freed ghosts are dropped");
+    rig.ghost.publish(&RenderRig::repeat());
+    rig.render(&canvas());
+    assert!(reports(&rig).iter().any(|report| report.world_reset));
 }

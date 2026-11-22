@@ -3,11 +3,11 @@ use super::block_actor_key::BlockActorKey;
 
 /// A bounded pool of block actors, one per key.
 ///
-/// Holds at most `CAPACITY` actors. A miss at capacity evicts the least recently used actor, which is dropped,
-/// unless that actor was used in the current frame: the miss then makes nothing and spends no budget, so more
-/// visible keys than the capacity settle on a stable set. A frame makes at most `MAKES_PER_FRAME` actors. A key
-/// whose make failed is remembered (the last `FAILED_CAPACITY` of them, oldest replaced) and is not retried until
-/// `clear`. Every buffer is allocated in `new`, so no call after `new` allocates.
+/// Holds at most `CAPACITY` actors. A miss at capacity evicts the least recently used actor, which goes to the
+/// caller's release, unless that actor was used in the current frame: the miss then makes nothing and spends no
+/// budget, so more visible keys than the capacity settle on a stable set. A frame makes at most `MAKES_PER_FRAME`
+/// actors. A key whose make failed for good is remembered (the last `FAILED_CAPACITY` of them, oldest replaced) and is not
+/// retried until `clear`. Every buffer is allocated in `new`, so no call after `new` allocates.
 pub struct BlockActorPool<A> {
     // actors by slot, pushed up to CAPACITY
     actors: Vec<A>,
@@ -30,7 +30,8 @@ pub struct BlockActorPool<A> {
 }
 
 impl<A> BlockActorPool<A> {
-    pub const CAPACITY: usize = 256;
+    // the loader's cap of live ghosts less the two the in-game gate holds
+    pub const CAPACITY: usize = 254;
     pub const MAKES_PER_FRAME: usize = 8;
     pub const FAILED_CAPACITY: usize = 64;
 
@@ -61,10 +62,16 @@ impl<A> BlockActorPool<A> {
     }
 
     /// The actor for `key`. A hit marks it most recently used. A miss calls `make` while the frame budget lasts
-    /// and keeps the result, evicting the least recently used actor at capacity; when that actor was used in this
-    /// frame the miss gives None and spends no budget. A key that failed before is not retried and spends no budget;
-    /// a failed make spends budget once.
-    pub fn get_or_make(&mut self, key: BlockActorKey, make: impl FnOnce() -> Option<A>) -> Option<&A> {
+    /// and keeps the result, evicting the least recently used actor at capacity into `release`; when that actor was
+    /// used in this frame the miss gives None and spends no budget. A key that failed for good before is not retried
+    /// and spends no budget; a failed make spends budget once, and is remembered only when it failed for good
+    /// (`Err(true)`); `Err(false)` is tried again in a later frame.
+    pub fn get_or_make(
+        &mut self,
+        key: BlockActorKey,
+        make: impl FnOnce() -> Result<A, bool>,
+        release: impl FnOnce(A),
+    ) -> Option<&A> {
         if let Some(slot) = self.touch(key) {
             return self.actors.get(slot);
         }
@@ -81,14 +88,19 @@ impl<A> BlockActorPool<A> {
             Some(slot)
         };
         self.makes_left -= 1;
-        let Some(actor) = make() else {
-            self.remember_failure(key);
-            return None;
+        let actor = match make() {
+            Ok(actor) => actor,
+            Err(for_good) => {
+                if for_good {
+                    self.remember_failure(key);
+                }
+                return None;
+            }
         };
         let slot = if let Some(slot) = victim {
             let old = *self.keys.get(slot)?;
             self.index.remove(&self.keys, &old);
-            *self.actors.get_mut(slot)? = actor;
+            release(std::mem::replace(self.actors.get_mut(slot)?, actor));
             *self.keys.get_mut(slot)? = key;
             *self.stamps.get_mut(slot)? = self.clock;
             slot
@@ -102,10 +114,10 @@ impl<A> BlockActorPool<A> {
         self.actors.get(slot)
     }
 
-    /// Drops every actor and forgets every failed key.
-    pub fn clear(&mut self) {
+    /// Hands every actor to `release` and forgets every failed key.
+    pub fn clear(&mut self, release: impl FnMut(A)) {
         self.index.clear();
-        self.actors.clear();
+        self.actors.drain(..).for_each(release);
         self.keys.clear();
         self.stamps.clear();
         self.failed.clear();

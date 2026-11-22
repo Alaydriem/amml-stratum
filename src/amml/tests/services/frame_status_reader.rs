@@ -1,10 +1,7 @@
-use alaydriem_stratum::detours::db_storage_shutdown::StorageShutdown;
-use alaydriem_stratum::services::{FrameStatusReader, WorldFolder, WorldKeyReader};
+use alaydriem_stratum::services::FrameStatusReader;
 use alaydriem_stratum::types::PlayerSpot;
 
 use crate::support::FakeWorld;
-
-const OLD_STORAGE: usize = 0x5000;
 
 #[test]
 fn with_no_local_player_the_status_is_in_world_with_an_empty_world() {
@@ -93,29 +90,4 @@ fn a_tick_out_of_the_world_keeps_the_local_key_and_it_is_logged_once() {
 
     assert_eq!(back.world, "local:My World");
     assert_eq!(reader.world_key().logged(), 1);
-}
-
-#[test]
-fn a_storage_shutdown_out_of_the_world_then_a_server_with_an_empty_first_read_never_names_the_old_folder() {
-    let folder = WorldFolder::new();
-    folder.set(OLD_STORAGE, Some("Old World".to_string()));
-    let world = FakeWorld::local("Old World");
-    let mut reader = FrameStatusReader::new();
-    reader.read(&world, 1.0);
-    world.active.set(false);
-    reader.read(&world, 2.0);
-    StorageShutdown::run(true, OLD_STORAGE, &folder);
-    world.active.set(true);
-    world.level.set(Some(0x2000));
-    *world.connection.borrow_mut() = None;
-    *world.folder.borrow_mut() = folder.current();
-
-    let mut keys = vec![reader.read(&world, 3.0).world.clone()];
-    *world.connection.borrow_mut() = Some(FakeWorld::connection(1, "203.0.113.7", "play.example.net", 19132));
-    for tick in 0..WorldKeyReader::SERVER_STABLE_READS {
-        keys.push(reader.read(&world, 4.0 + f64::from(tick)).world.clone());
-    }
-
-    assert!(keys.iter().all(|key| !key.starts_with("local:")), "{keys:?}");
-    assert_eq!(keys.last().map(String::as_str), Some("server:play.example.net:19132"));
 }

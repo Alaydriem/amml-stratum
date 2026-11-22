@@ -1,4 +1,5 @@
 use alaydriem_stratum::build::ConditionsReader;
+use amml_api::{ConnectionKind, GameType, PermissionLevel};
 use stratum_core::structs::build::BuildConditions;
 
 use crate::support::FakeBuildWorld;
@@ -25,7 +26,7 @@ fn conditions_are_false_when_the_feature_is_off() {
 #[test]
 fn remote_or_realm_is_not_local() {
     let mut server = FakeBuildWorld::ready();
-    server.connection = Some(2);
+    server.connection = Some(ConnectionKind::Remote);
     let mut realm = FakeBuildWorld::ready();
     realm.realm = true;
     let mut unknown = FakeBuildWorld::ready();
@@ -37,50 +38,50 @@ fn remote_or_realm_is_not_local() {
 }
 
 #[test]
-fn creative_is_game_type_one_only() {
+fn creative_is_the_creative_game_type_only() {
     let mut reader = ConditionsReader::new(true);
     let mut world = FakeBuildWorld::ready();
 
-    world.game_type = Some(0);
+    world.game_type = Some(GameType::Survival);
     assert!(!reader.read(&world).creative);
-    world.game_type = Some(2);
+    world.game_type = Some(GameType::Adventure);
     assert!(!reader.read(&world).creative);
     world.game_type = None;
     assert!(!reader.read(&world).creative);
-    world.game_type = Some(1);
+    world.game_type = Some(GameType::Creative);
     assert!(reader.read(&world).creative);
 }
 
 #[test]
-fn operator_is_permission_level_two_or_more() {
+fn operator_is_the_operator_level_or_above() {
     let mut reader = ConditionsReader::new(true);
     let mut world = FakeBuildWorld::ready();
 
-    world.permission = Some(1);
+    world.permission = Some(PermissionLevel::Member);
     assert!(!reader.read(&world).operator);
     world.permission = None;
     assert!(!reader.read(&world).operator);
-    world.permission = Some(2);
+    world.permission = Some(PermissionLevel::Operator);
     assert!(reader.read(&world).operator);
-    world.permission = Some(3);
+    world.permission = Some(PermissionLevel::Custom);
     assert!(reader.read(&world).operator);
 }
 
 #[test]
-fn cheats_follow_the_commands_flag() {
+fn cheats_follow_the_commands_setting() {
     let mut reader = ConditionsReader::new(true);
     let mut world = FakeBuildWorld::ready();
 
-    world.commands = Some(0);
+    world.commands = Some(false);
     assert!(!reader.read(&world).cheats);
     world.commands = None;
     assert!(!reader.read(&world).cheats);
-    world.commands = Some(1);
+    world.commands = Some(true);
     assert!(reader.read(&world).cheats);
 }
 
 #[test]
-fn the_permission_function_is_never_called_without_a_player_in_a_world() {
+fn the_permission_is_never_read_without_a_player_in_a_world() {
     let mut world = FakeBuildWorld::ready();
     world.in_world = false;
 
@@ -109,20 +110,20 @@ fn the_connection_is_read_again_for_another_world() {
     assert!(reader.read(&world).local);
 
     world.level = Some(2);
-    world.connection = Some(3);
+    world.connection = Some(ConnectionKind::Remote);
 
     assert!(!reader.read(&world).local);
     assert_eq!(world.connection_reads.get(), 2);
 }
 
 #[test]
-fn an_undefined_connection_is_read_again_next_time() {
+fn a_connection_the_game_has_not_set_is_read_again_next_time() {
     let mut world = FakeBuildWorld::ready();
-    world.connection = Some(-1);
+    world.connection = None;
     let mut reader = ConditionsReader::new(true);
     assert!(!reader.read(&world).local);
 
-    world.connection = Some(0);
+    world.connection = Some(ConnectionKind::Local);
 
     assert!(reader.read(&world).local);
     assert_eq!(world.connection_reads.get(), 2);
@@ -140,7 +141,7 @@ fn a_realm_is_not_local_even_when_its_connection_was_read_as_local() {
 }
 
 #[test]
-fn a_level_address_reused_after_leaving_a_world_is_read_again() {
+fn the_connection_is_read_again_after_leaving_a_world() {
     let mut world = FakeBuildWorld::ready();
     let mut reader = ConditionsReader::new(true);
     assert!(reader.read(&world).local);
@@ -148,7 +149,7 @@ fn a_level_address_reused_after_leaving_a_world_is_read_again() {
     world.in_world = false;
     reader.read(&world);
     world.in_world = true;
-    world.connection = Some(3);
+    world.connection = Some(ConnectionKind::Remote);
 
     assert!(!reader.read(&world).local);
 }
@@ -162,7 +163,21 @@ fn a_missing_level_forgets_the_connection() {
     world.level = None;
     reader.read(&world);
     world.level = Some(1);
-    world.connection = Some(3);
+    world.connection = Some(ConnectionKind::Remote);
 
     assert!(!reader.read(&world).local);
+}
+
+#[test]
+fn an_undefined_connection_is_read_again_next_time() {
+    let mut world = FakeBuildWorld::ready();
+    // the loader gives the game's undefined connection type as Other
+    world.connection = Some(ConnectionKind::Other);
+    let mut reader = ConditionsReader::new(true);
+    assert!(!reader.read(&world).local);
+
+    world.connection = Some(ConnectionKind::Local);
+
+    assert!(reader.read(&world).local);
+    assert_eq!(world.connection_reads.get(), 2);
 }

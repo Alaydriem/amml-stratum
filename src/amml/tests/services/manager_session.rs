@@ -4,6 +4,7 @@ use amm_core::structs::descriptor::Capability;
 use amm_core::structs::event::{KeybindPhase, ModEvent};
 use amm_core::structs::lease::AcquireOutcome;
 use amm_core::structs::registry::ModIndex;
+use amml_api::{Area, InputBlocks};
 use stratum_core::structs::action::LibraryAction;
 use stratum_core::structs::hud::HudMode;
 
@@ -17,7 +18,8 @@ fn open_key_opens_with_the_overlay_and_input_leases() {
     session.open();
 
     assert!(session.shared().is_shown());
-    assert_eq!(Leases::acquired(), [Capability::Overlay, Capability::Input]);
+    assert_eq!(Leases::acquired(), [Capability::Overlay]);
+    assert!(session.input_held());
     assert!(Leases::released().is_empty());
 }
 
@@ -43,7 +45,8 @@ fn open_key_toggles_the_library() {
     session.tick(&CoreSession::in_world());
 
     assert!(!session.shared().is_shown());
-    assert_eq!(Leases::released(), [Capability::Input, Capability::Overlay]);
+    assert_eq!(Leases::released(), [Capability::Overlay]);
+    assert!(!session.input_held());
 }
 
 #[test]
@@ -79,20 +82,21 @@ fn denied_overlay_does_not_open() {
 
     assert!(!session.shared().is_shown());
     assert_eq!(Leases::acquired(), [Capability::Overlay]);
-    let denied = CoreSession::logged("overlay lease denied");
+    let denied = session.logged("overlay lease denied");
     assert_eq!(denied.len(), 1);
     assert!(denied[0].fields_json.contains("alaydriem-other"));
 }
 
 #[test]
-fn a_denied_input_lease_still_opens_the_library() {
+fn a_refused_input_lease_still_opens_the_library() {
     let session = CoreSession::new();
-    FakeTable::set_acquire_outcome(Capability::Input, AcquireOutcome::Denied { holder: ModIndex(5) });
+    session.game.withdraw_area(Area::INPUT_LEASE);
 
     session.open();
 
     assert!(session.shared().is_shown());
-    assert_eq!(Leases::acquired(), [Capability::Overlay, Capability::Input]);
+    assert_eq!(Leases::acquired(), [Capability::Overlay]);
+    assert!(!session.input_held());
 
     FakeTable::push_event(CoreSession::OPEN_KEY);
     session.tick(&CoreSession::in_world());
@@ -109,7 +113,8 @@ fn leaving_the_world_closes_the_library() {
     session.tick(&CoreSession::out_of_world());
 
     assert!(!session.shared().is_shown());
-    assert_eq!(Leases::released(), [Capability::Input, Capability::Overlay]);
+    assert_eq!(Leases::released(), [Capability::Overlay]);
+    assert!(!session.input_held());
 }
 
 #[test]
@@ -122,7 +127,8 @@ fn a_close_from_the_frame_releases_the_lease_on_the_next_tick() {
     assert!(Leases::released().is_empty());
     session.tick(&CoreSession::in_world());
 
-    assert_eq!(Leases::released(), [Capability::Input, Capability::Overlay]);
+    assert_eq!(Leases::released(), [Capability::Overlay]);
+    assert!(!session.input_held());
 }
 
 #[test]
@@ -130,8 +136,9 @@ fn a_revoked_overlay_closes_the_library() {
     let session = Leases::closed_by(ModEvent::Revoked { capability: Capability::Overlay, by: ModIndex(2) });
 
     assert!(!session.shared().is_shown());
-    assert_eq!(Leases::released(), [Capability::Input, Capability::Overlay]);
-    let closed = CoreSession::logged("library closed");
+    assert_eq!(Leases::released(), [Capability::Overlay]);
+    assert!(!session.input_held());
+    let closed = session.logged("library closed");
     assert_eq!(closed.len(), 1);
     assert!(closed[0].fields_json.contains("revoked"));
 }
@@ -141,8 +148,9 @@ fn a_suspended_overlay_closes_the_library_and_gives_the_lease_back() {
     let session = Leases::closed_by(ModEvent::Suspended { capability: Capability::Overlay, by: ModIndex(3) });
 
     assert!(!session.shared().is_shown());
-    assert_eq!(Leases::released(), [Capability::Input, Capability::Overlay]);
-    let closed = CoreSession::logged("library closed");
+    assert_eq!(Leases::released(), [Capability::Overlay]);
+    assert!(!session.input_held());
+    let closed = session.logged("library closed");
     assert_eq!(closed.len(), 1);
     assert!(closed[0].fields_json.contains("suspended"));
 }
@@ -152,8 +160,9 @@ fn a_disabled_mod_closes_the_library() {
     let session = Leases::closed_by(ModEvent::Disabled);
 
     assert!(!session.shared().is_shown());
-    assert_eq!(Leases::released(), [Capability::Input, Capability::Overlay]);
-    let closed = CoreSession::logged("library closed");
+    assert_eq!(Leases::released(), [Capability::Overlay]);
+    assert!(!session.input_held());
+    let closed = session.logged("library closed");
     assert_eq!(closed.len(), 1);
     assert!(closed[0].fields_json.contains("disabled"));
 }
@@ -174,8 +183,9 @@ fn a_game_menu_closes_the_library() {
     session.tick(&CoreSession::in_menu());
 
     assert!(!session.shared().is_shown());
-    assert_eq!(Leases::released(), [Capability::Input, Capability::Overlay]);
-    let closed = CoreSession::logged("library closed");
+    assert_eq!(Leases::released(), [Capability::Overlay]);
+    assert!(!session.input_held());
+    let closed = session.logged("library closed");
     assert_eq!(closed.len(), 1);
     assert!(closed[0].fields_json.contains("menu"));
 }
@@ -192,9 +202,10 @@ fn the_pause_screen_after_escape_leaves_nothing_held() {
     session.tick(&CoreSession::in_world());
 
     assert!(!session.shared().is_shown());
-    assert_eq!(Leases::acquired(), [Capability::Overlay, Capability::Input]);
-    assert_eq!(Leases::released(), [Capability::Input, Capability::Overlay]);
-    assert_eq!(CoreSession::logged("library closed").len(), 1);
+    assert_eq!(Leases::acquired(), [Capability::Overlay]);
+    assert_eq!(Leases::released(), [Capability::Overlay]);
+    assert!(!session.input_held());
+    assert_eq!(session.logged("library closed").len(), 1);
 }
 
 #[test]
@@ -212,12 +223,12 @@ fn open_key_while_a_game_menu_is_shown_does_nothing() {
 fn open_and_close_are_logged_with_the_close_reason() {
     let session = CoreSession::new();
     session.open();
-    assert_eq!(CoreSession::logged("library opened").len(), 1);
+    assert_eq!(session.logged("library opened").len(), 1);
 
     FakeTable::push_event(CoreSession::OPEN_KEY);
     session.tick(&CoreSession::in_world());
 
-    let closed = CoreSession::logged("library closed");
+    let closed = session.logged("library closed");
     assert_eq!(closed.len(), 1);
     assert!(closed[0].fields_json.contains("key"));
 }
@@ -231,7 +242,8 @@ fn menu_without_a_picker_still_closes() {
     session.tick(&CoreSession::in_menu_at(2.0));
 
     assert!(!session.shared().is_shown());
-    assert_eq!(Leases::released(), [Capability::Input, Capability::Overlay]);
+    assert_eq!(Leases::released(), [Capability::Overlay]);
+    assert!(!session.input_held());
 }
 
 #[test]
@@ -278,7 +290,7 @@ fn guard_ends_on_the_first_tick_without_a_menu() {
 
     session.tick(&CoreSession::in_menu_at(4.0));
     assert!(!session.shared().is_shown());
-    let closed = CoreSession::logged("library closed");
+    let closed = session.logged("library closed");
     assert_eq!(closed.len(), 1);
     assert!(closed[0].fields_json.contains("menu"));
 }
@@ -298,18 +310,20 @@ fn menu_after_the_settle_time_closes_then_reopens_once() {
 
     assert!(!session.shared().is_shown());
     assert!(!PickerGuard::unwanted(&session));
-    assert_eq!(Leases::released(), [Capability::Input, Capability::Overlay]);
-    let closed = CoreSession::logged("library closed");
+    assert_eq!(Leases::released(), [Capability::Overlay]);
+    assert!(!session.input_held());
+    let closed = session.logged("library closed");
     assert!(closed[0].fields_json.contains("menu"));
 
     session.tick(&CoreSession::in_world_at(5.2));
     assert!(session.shared().is_shown());
-    assert_eq!(Leases::acquired(), [Capability::Overlay, Capability::Input, Capability::Overlay, Capability::Input]);
+    assert_eq!(Leases::acquired(), [Capability::Overlay, Capability::Overlay]);
+    assert!(session.input_held());
 
     session.tick(&CoreSession::in_menu_at(5.3));
     session.tick(&CoreSession::in_world_at(5.4));
     assert!(!session.shared().is_shown());
-    assert_eq!(Leases::acquired().len(), 4);
+    assert_eq!(Leases::acquired().len(), 2);
 }
 
 #[test]
@@ -327,7 +341,7 @@ fn the_open_key_cancels_a_pending_reopen() {
     session.tick(&CoreSession::in_menu_at(6.5));
     session.tick(&CoreSession::in_world_at(7.0));
     assert!(!session.shared().is_shown());
-    assert_eq!(Leases::acquired().len(), 2);
+    assert_eq!(Leases::acquired().len(), 1);
 }
 
 #[test]
@@ -400,7 +414,7 @@ fn world_exit_clears_a_pending_reopen() {
     session.tick(&CoreSession::in_world_at(8.0));
 
     assert!(!session.shared().is_shown());
-    assert_eq!(Leases::acquired().len(), 2);
+    assert_eq!(Leases::acquired().len(), 1);
 }
 
 #[test]
@@ -414,7 +428,7 @@ fn disabled_clears_a_pending_reopen() {
     session.tick(&CoreSession::in_world_at(8.0));
 
     assert!(!session.shared().is_shown());
-    assert_eq!(Leases::acquired().len(), 2);
+    assert_eq!(Leases::acquired().len(), 1);
 }
 
 #[test]
@@ -425,14 +439,15 @@ fn world_exit_during_the_picker_closes_without_reopen() {
 
     session.tick(&CoreSession::out_of_world());
     assert!(!session.shared().is_shown());
-    assert_eq!(Leases::released(), [Capability::Input, Capability::Overlay]);
+    assert_eq!(Leases::released(), [Capability::Overlay]);
+    assert!(!session.input_held());
 
     PickerGuard::cancel(&session);
     session.tick(&CoreSession::in_world_at(3.0));
     session.tick(&CoreSession::in_world_at(4.0));
 
     assert!(!session.shared().is_shown());
-    assert_eq!(Leases::acquired().len(), 2);
+    assert_eq!(Leases::acquired().len(), 1);
 }
 
 #[test]
@@ -452,7 +467,7 @@ fn world_draw_held_only_while_a_marker_is_active_and_shown() {
     session.tick(&CoreSession::in_world());
 
     assert_eq!(Markers::world_draw(Leases::released()), 1);
-    assert_eq!(CoreSession::logged("world draw lease given back").len(), 1);
+    assert_eq!(session.logged("world draw lease given back").len(), 1);
 }
 
 #[test]
@@ -480,7 +495,7 @@ fn suspended_world_draw_stops_the_ghost_and_keeps_the_marker() {
     assert!(stopped.frees.is_empty());
     assert_eq!(Markers::world_draw(Leases::released()), 1);
     assert!(session.shared().snapshot().markers.iter().any(|marker| marker.active));
-    let lost = CoreSession::logged("world draw lease lost");
+    let lost = session.logged("world draw lease lost");
     assert_eq!(lost.len(), 1);
     assert!(lost[0].fields_json.contains("suspended"));
 
@@ -575,7 +590,7 @@ fn a_denied_world_draw_waits_and_logs_once() {
     session.tick(&CoreSession::in_world_at(1.0 + ManagerSession::WORLD_DRAW_RETRY_SECONDS));
 
     assert_eq!(Markers::world_draw(Leases::acquired()), 2);
-    assert_eq!(CoreSession::logged("world draw lease denied").len(), 1);
+    assert_eq!(session.logged("world draw lease denied").len(), 1);
 }
 
 #[test]
@@ -608,30 +623,9 @@ fn hud_lease_held_only_while_conditions_hold() {
 }
 
 #[test]
-fn another_mods_input_lease_keeps_the_hud_lease_back() {
-    let session = CoreSession::new();
-    FakeTable::set_held_by_other(Capability::Input, true);
-    Markers::place(&session);
-    session.tick(&CoreSession::in_world());
-
-    assert!(!Hud::shown(&session));
-
-    FakeTable::set_held_by_other(Capability::Input, false);
-    session.tick(&CoreSession::in_world());
-
-    assert!(Hud::shown(&session));
-
-    FakeTable::set_held_by_other(Capability::Input, true);
-    session.tick(&CoreSession::in_world());
-
-    assert!(!Hud::shown(&session));
-    assert_eq!(Hud::count(Leases::released(), Capability::Hud), 1);
-}
-
-#[test]
 fn another_mods_shared_overlay_does_not_stand_the_hud_down() {
     let session = CoreSession::new();
-    FakeTable::set_held_by_other(Capability::Overlay, true);
+    FakeTable::with(|state| state.held_by_other.insert(Capability::Overlay, true));
 
     Markers::place(&session);
 
@@ -709,7 +703,7 @@ fn a_denied_hud_lease_waits_and_logs_once() {
     session.tick(&CoreSession::in_world_at(1.0 + ManagerSession::HUD_RETRY_SECONDS));
 
     assert_eq!(Hud::count(Leases::acquired(), Capability::Hud), 2);
-    assert_eq!(CoreSession::logged("hud lease denied").len(), 1);
+    assert_eq!(session.logged("hud lease denied").len(), 1);
 }
 
 #[test]
@@ -820,8 +814,7 @@ fn a_hud_key_is_ignored_while_the_lease_is_not_held() {
 fn library_holds_input_exclusively_while_open() {
     let session = CoreSession::new();
     session.open();
-    assert_eq!(Hud::count(Leases::acquired(), Capability::Input), 1);
-    assert_eq!(Hud::count(Leases::released(), Capability::Input), 0);
+    assert!(session.input_held());
 }
 
 #[test]
@@ -832,7 +825,7 @@ fn input_is_released_on_a_key_close() {
     FakeTable::push_event(CoreSession::OPEN_KEY);
     session.tick(&CoreSession::in_world());
 
-    assert_eq!(Hud::count(Leases::released(), Capability::Input), 1);
+    assert!(!session.input_held());
 }
 
 #[test]
@@ -843,7 +836,7 @@ fn input_is_released_on_a_frame_close() {
     session.shared().request_close();
     session.tick(&CoreSession::in_world());
 
-    assert_eq!(Hud::count(Leases::released(), Capability::Input), 1);
+    assert!(!session.input_held());
 }
 
 #[test]
@@ -853,7 +846,7 @@ fn input_is_released_on_a_menu_close() {
 
     session.tick(&CoreSession::in_menu());
 
-    assert_eq!(Hud::count(Leases::released(), Capability::Input), 1);
+    assert!(!session.input_held());
 }
 
 #[test]
@@ -863,7 +856,7 @@ fn input_is_released_on_a_world_exit() {
 
     session.tick(&CoreSession::out_of_world());
 
-    assert_eq!(Hud::count(Leases::released(), Capability::Input), 1);
+    assert!(!session.input_held());
 }
 
 #[test]
@@ -873,7 +866,7 @@ fn input_is_released_by_the_panic_release() {
 
     session.handle().with_state(|state| state.release_ui()).unwrap();
 
-    assert_eq!(Hud::count(Leases::released(), Capability::Input), 1);
+    assert!(!session.input_held());
 }
 
 #[test]
@@ -884,7 +877,7 @@ fn input_is_released_when_the_mod_is_disabled() {
     FakeTable::push_event(ModEvent::Disabled);
     session.tick(&CoreSession::in_world());
 
-    assert_eq!(Hud::count(Leases::released(), Capability::Input), 1);
+    assert!(!session.input_held());
 }
 
 #[test]
@@ -893,5 +886,19 @@ fn a_closed_library_never_holds_input() {
     Markers::place(&session);
     session.tick(&CoreSession::in_world());
 
-    assert_eq!(Hud::count(Leases::acquired(), Capability::Input), 0);
+    assert!(!session.input_held());
+}
+
+#[test]
+fn another_mods_input_lease_stands_the_hud_down() {
+    let session = CoreSession::new();
+    Markers::place(&session);
+    session.tick(&CoreSession::in_world());
+    assert!(Hud::shown(&session));
+
+    assert!(session.game.lease_as_other_mod("@alaydriem/other", InputBlocks::LOOK));
+    session.tick(&CoreSession::in_world());
+
+    assert!(!Hud::shown(&session));
+    assert_eq!(Hud::count(Leases::released(), Capability::Hud), 1);
 }

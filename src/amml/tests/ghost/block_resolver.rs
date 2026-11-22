@@ -1,111 +1,121 @@
-use std::ffi::c_void;
-use std::sync::atomic::Ordering;
+use std::sync::Arc;
 
-use alaydriem_stratum::ghost::{BlockResolver, LayerPasses};
+use alaydriem_stratum::ghost::BlockResolver;
+use amml_api::BlockHandle;
+use amml_api::testing::{FakeClient, FakeGame};
 use stratum_core::structs::ghost::GhostPalette;
 use stratum_core::structs::structure::{BlockState, BlockStates, StateValue};
 
-use crate::support::FakeGhost;
-use crate::support::fake_ghost::{
-    EXTRA_LAYER_MASK, EXTRA_LAYERS, GRAPHICS_SHAPE, KNOWN_NAME, NBT_READ_CALLS, NBT_STATE, RENDER_LAYER,
-    TAG_DTOR_CALLS, TAGS_LIVE,
-};
+use crate::support::StratumRig;
 
-// the palette entry bytes of `name` with one int state, as the ghost palette writes them
-fn entry_bytes(name: &str) -> Vec<u8> {
-    let mut palette = GhostPalette::new();
-    palette.entries.push(BlockState::new(
-        name.to_string(),
-        BlockStates::new(vec![("weirdo_direction".to_string(), StateValue::Int(2))]),
-    ));
-    let mut out = Vec::new();
-    palette.entry_nbt(0, &mut out).unwrap();
-    out
-}
+const STAIRS: u64 = 20;
+const STAIRS_TURNED: u64 = 21;
 
-fn joined() -> BlockResolver {
-    let mut blocks = BlockResolver::new(&FakeGhost::calls());
-    assert!(blocks.join(), "air and stone are known");
-    blocks
-}
-
-fn unknown() -> *const c_void {
-    FakeGhost::block("minecraft:unknown") as *const c_void
-}
-
-#[test]
-fn empty_cut_short_and_unknown_entries_each_give_the_unknown_block_and_count_once() {
-    NBT_STATE.store(1, Ordering::SeqCst);
-    let mut blocks = joined();
-    let full = entry_bytes(KNOWN_NAME);
-    let unknown_name = entry_bytes("minecraft:not_a_block");
-    let entries: [&[u8]; 3] = [&[], &full[..5], &unknown_name];
-
-    for entry in entries {
-        blocks.resolve([entry].into_iter(), 0);
-
-        assert_eq!(blocks.block(0), unknown());
-        assert_eq!(blocks.take_unknown(), 1);
+fn game() -> FakeGame {
+    let game = FakeGame::new();
+    for area in StratumRig::areas() {
+        game.offer_area(area);
     }
-    assert_eq!(blocks.take_default_state(), 0);
+    game.open_gate();
+    game.set_epoch(1);
+    let mut world = StratumRig::world();
+    world.states.insert(
+        ("minecraft:oak_stairs".to_string(), vec![("weirdo_direction".to_string(), "0".to_string())]),
+        BlockHandle::for_test(STAIRS),
+    );
+    world.default_states.insert("minecraft:oak_stairs".to_string(), BlockHandle::for_test(STAIRS));
+    world.rotated.insert((BlockHandle::for_test(STAIRS), 1), BlockHandle::for_test(STAIRS_TURNED));
+    game.set_client(FakeClient { local_player: true, world_active: true, world: Some(world), ..FakeClient::default() });
+    game
+}
+
+fn entries(states: &[BlockState]) -> Vec<Vec<u8>> {
+    let palette = Arc::new(GhostPalette { entries: states.to_vec() });
+    (0..states.len() as u16)
+        .map(|id| {
+            let mut out = Vec::new();
+            palette.entry_nbt(id, &mut out).unwrap();
+            out
+        })
+        .collect()
+}
+
+fn stairs(direction: &str, value: i32) -> BlockState {
+    BlockState::new(
+        "minecraft:oak_stairs".to_string(),
+        BlockStates::new(vec![(direction.to_string(), StateValue::Int(value))]),
+    )
 }
 
 #[test]
-fn every_tag_the_read_made_is_destroyed_once() {
-    NBT_STATE.store(1, Ordering::SeqCst);
-    let mut blocks = joined();
-    let full = entry_bytes(KNOWN_NAME);
-    let unknown_name = entry_bytes("minecraft:not_a_block");
+fn entries_resolve_exact_then_default_then_unknown_and_the_fallbacks_are_counted() {
+    let game = game();
+    let blocks = game.ctx().blocks();
+    let mut resolver = BlockResolver::new();
+    assert!(resolver.join(&blocks));
+    let states = [
+        BlockState::new("minecraft:stone".to_string(), BlockStates::default()),
+        stairs("weirdo_direction", 7),
+        BlockState::new("minecraft:nothing".to_string(), BlockStates::default()),
+    ];
+    let bytes = entries(&states);
 
-    blocks.resolve([&[][..], &full[..5], &unknown_name, &full].into_iter(), 0);
+    resolver.resolve(&blocks, bytes.iter().map(Vec::as_slice), 0);
 
-    assert_eq!(FakeGhost::count(&NBT_READ_CALLS), 3, "an empty entry is not read");
-    assert_eq!(FakeGhost::count(&TAG_DTOR_CALLS), 3);
-    assert_eq!(FakeGhost::count(&TAGS_LIVE), 0);
-    assert_eq!(blocks.take_unknown(), 3);
-    assert_eq!(blocks.take_default_state(), 1);
+    assert_eq!(resolver.block(0), Some(BlockHandle::for_test(StratumRig::STONE)));
+    assert_eq!(resolver.block(1), Some(BlockHandle::for_test(STAIRS)));
+    assert_eq!(resolver.block(2), Some(BlockHandle::for_test(StratumRig::UNKNOWN)));
+    assert_eq!(resolver.take_default_state(), 1);
+    assert_eq!(resolver.take_unknown(), 1);
+    assert_eq!(resolver.take_unknown(), 0, "a count is taken once");
 }
 
 #[test]
-fn a_resolved_entry_keeps_its_graphics_and_layer_passes() {
-    EXTRA_LAYER_MASK.store(EXTRA_LAYERS, Ordering::SeqCst);
-    let mut blocks = joined();
-    let entry = entry_bytes(KNOWN_NAME);
+fn a_rotation_turns_each_block_with_the_game_but_never_the_unknown_block() {
+    let game = game();
+    let blocks = game.ctx().blocks();
+    let mut resolver = BlockResolver::new();
+    resolver.join(&blocks);
+    let states =
+        [stairs("weirdo_direction", 0), BlockState::new("minecraft:nothing".to_string(), BlockStates::default())];
+    let bytes = entries(&states);
 
-    blocks.resolve([&entry[..]].into_iter(), 1);
+    resolver.resolve(&blocks, bytes.iter().map(Vec::as_slice), 1);
 
-    assert_eq!(blocks.block(0), FakeGhost::known_block() as *const c_void);
-    assert_eq!(blocks.graphics(0), FakeGhost::graphics() as *const c_void);
-    assert_eq!(blocks.passes(0), LayerPasses::new(RENDER_LAYER, EXTRA_LAYERS));
-    assert_eq!(blocks.passes(1), LayerPasses::default(), "an id past the palette has no passes");
-    assert!(blocks.block(1).is_null(), "an id past the palette has no block");
-    assert!(blocks.block(u16::MAX).is_null(), "an empty cell has no block");
+    assert_eq!(resolver.block(0), Some(BlockHandle::for_test(STAIRS_TURNED)));
+    assert_eq!(game.rotations(), vec![(BlockHandle::for_test(STAIRS), 1)]);
 }
 
 #[test]
-fn leave_forgets_every_block_of_the_world() {
-    let mut blocks = joined();
-    let entry = entry_bytes(KNOWN_NAME);
-    blocks.resolve([&entry[..]].into_iter(), 0);
+fn air_and_empty_cells_hold_no_block_but_every_id_names_a_handle_for_the_mesher() {
+    let game = game();
+    let blocks = game.ctx().blocks();
+    let mut resolver = BlockResolver::new();
+    resolver.join(&blocks);
+    let states = [BlockState::new("minecraft:air".to_string(), BlockStates::default())];
+    let bytes = entries(&states);
 
-    blocks.leave();
+    resolver.resolve(&blocks, bytes.iter().map(Vec::as_slice), 0);
 
-    assert!(blocks.block(0).is_null());
-    assert_eq!(blocks.passes(0), LayerPasses::default());
-    assert!(blocks.air().is_null());
+    assert_eq!(resolver.block(0), None);
+    assert_eq!(resolver.block(BlockResolver::EMPTY), None);
+    assert_eq!(resolver.handles(), &[BlockHandle::for_test(StratumRig::AIR)]);
 }
 
 #[test]
-fn a_block_of_a_one_quad_shape_is_double_sided_and_a_cube_is_not() {
-    let entry = entry_bytes(KNOWN_NAME);
+fn a_world_with_no_air_cannot_be_joined_and_resolves_nothing() {
+    let game = FakeGame::new();
+    for area in StratumRig::areas() {
+        game.offer_area(area);
+    }
+    game.open_gate();
+    game.set_epoch(1);
+    game.set_client(FakeClient { local_player: true, world_active: true, ..FakeClient::default() });
+    let blocks = game.ctx().blocks();
+    let mut resolver = BlockResolver::new();
 
-    GRAPHICS_SHAPE.store(1, Ordering::SeqCst);
-    let mut blocks = joined();
-    blocks.resolve([&entry[..]].into_iter(), 0);
-    assert!(blocks.double_sided(0));
-    assert!(!blocks.double_sided(1), "an id past the palette is not double sided");
-
-    GRAPHICS_SHAPE.store(0, Ordering::SeqCst);
-    blocks.resolve([&entry[..]].into_iter(), 0);
-    assert!(!blocks.double_sided(0));
+    assert!(!resolver.join(&blocks));
+    let bytes = entries(&[BlockState::new("minecraft:stone".to_string(), BlockStates::default())]);
+    resolver.resolve(&blocks, bytes.iter().map(Vec::as_slice), 0);
+    assert!(!resolver.is_resolved());
 }

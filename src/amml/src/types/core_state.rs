@@ -1,49 +1,51 @@
-use crate::build::BuildExecutor;
-use crate::ghost::BlockChangeListener;
-#[cfg(feature = "gate")]
-use crate::services::GatePlacer;
-use crate::services::{FileDialog, FrameStatusReader, PickerPump, StratumHandle};
-use crate::types::LinkState;
+use std::sync::Arc;
 
-// the per-tick state of one enable, owned by the game thread behind the runtime's lock: the running core, the frame
-// status reader with its world key, the import picker, the block listener on the client region and, with the gate,
-// the sample placer
+use amm_client::link::ManagerLink;
+use stratum_core::structs::build::BuildConditions;
+
+use crate::build::BuildExecutor;
+use crate::services::{FileDialog, FrameStatusReader, PickerPump, SharedUi, StratumHandle};
+use crate::traits::{UseCore, UseCoreHolder};
+
+// the per-tick state of one enable, owned by the game thread behind the runtime's lock: the manager link until it
+// connects, then the running core, the frame status reader with its world key, the import picker and the build
 pub struct CoreState {
-    pub link: LinkState,
+    // the link started at enable, until the manager's tables are there and the core starts on it
+    pub link: Option<ManagerLink>,
+    // the state the link's frame handler was made with, for the core
+    pub shared: Arc<SharedUi>,
     pub handle: Option<StratumHandle>,
     pub frame: FrameStatusReader,
     pub picker: PickerPump<FileDialog>,
     // whether the last tick reached the core, so a failure and a recovery are each logged once
     pub last_tick_ok: bool,
-    // made on the game heap at the first world; kept across enables while a source may still hold it
-    pub listener: Option<BlockChangeListener>,
-    // the listener could not be made, so block changes stay off until the game restarts
-    pub listener_failed: bool,
-    // reads the build conditions, answers the core's requests and sends its commands; stopped while the build is off
+    // reads the build conditions and answers the core's requests; stopped while the build is off
     pub build: BuildExecutor,
-    #[cfg(feature = "gate")]
-    pub placer: Option<GatePlacer>,
+    // the conditions of the last tick
+    pub conditions: BuildConditions,
+    // the link was found gone and the line was logged
+    pub gone_logged: bool,
 }
 
 impl CoreState {
-    pub fn new() -> Self {
+    pub fn new(link: ManagerLink, shared: Arc<SharedUi>, build: BuildExecutor) -> Self {
         Self {
-            link: LinkState::Off,
+            link: Some(link),
+            shared,
             handle: None,
             frame: FrameStatusReader::new(),
             picker: PickerPump::new(FileDialog::new()),
             last_tick_ok: true,
-            listener: None,
-            listener_failed: false,
-            build: BuildExecutor::new(None),
-            #[cfg(feature = "gate")]
-            placer: None,
+            build,
+            conditions: BuildConditions::default(),
+            gone_logged: false,
         }
     }
 }
 
-impl Default for CoreState {
-    fn default() -> Self {
-        Self::new()
+// the running core answers the use calls; None while the link has not connected
+impl UseCoreHolder for CoreState {
+    fn use_core(&mut self) -> Option<&mut dyn UseCore> {
+        self.handle.as_mut().map(|handle| handle as &mut dyn UseCore)
     }
 }

@@ -1,3 +1,5 @@
+use amml_api::ConnectionKind;
+
 use crate::traits::WorldSource;
 use crate::types::{ConnectionInfo, KeyKind};
 
@@ -7,12 +9,11 @@ use crate::types::{ConnectionInfo, KeyKind};
 // during the first `REALM_RECHECK_READS` reads in case the game says late that it is in a Realm. A Realm key needs
 // a non-empty level name, and a server: key is taken only after the same key, out of a Realm, on
 // `SERVER_STABLE_READS` reads in a row. A world with neither a local nor a server source takes the name key after
-// `FALLBACK_AFTER_READS` reads. A chosen key is logged at info level when it is not the key logged last, so a world
-// that is read again after a tick out of it is not logged twice. The client level is kept as an address only, never
-// followed
+// `FALLBACK_AFTER_READS` reads. A chosen key is handed to the caller's log once when it is not the key logged last, so
+// a world that is read again after a tick out of it is not logged twice. The world is named by the loader's epoch
 pub struct WorldKeyReader {
-    // the client level of the last read
-    level: Option<usize>,
+    // the world epoch of the last read
+    level: Option<u64>,
     kind: KeyKind,
     attempts: u32,
     // the server key read last while it is not yet taken, and how many reads in a row gave it
@@ -21,6 +22,9 @@ pub struct WorldKeyReader {
     // the key logged last, and how many keys were logged
     last_logged: String,
     logged: u32,
+    // a key was chosen that is not the key logged last, and the caller has not taken it yet
+    fresh: bool,
+    last_in_realm: bool,
 }
 
 impl WorldKeyReader {
@@ -45,6 +49,8 @@ impl WorldKeyReader {
             candidate_reads: 0,
             last_logged: String::new(),
             logged: 0,
+            fresh: false,
+            last_in_realm: false,
         }
     }
 
@@ -152,7 +158,7 @@ impl WorldKeyReader {
     // info counts as local too
     fn read_local(source: &impl WorldSource, connection: Option<&ConnectionInfo>, key: &mut String) -> bool {
         if let Some(connection) = connection
-            && connection.connection_type != ConnectionInfo::LOCAL
+            && connection.kind != ConnectionKind::Local
             && !Self::is_loopback(&connection.host)
             && !Self::is_loopback(&connection.url)
         {
@@ -164,17 +170,15 @@ impl WorldKeyReader {
         true
     }
 
-    // the unresolved URL, or the host when there is none, and the port; an address with a colon that is not already
-    // in brackets is bracketed
+    // the address the player typed, or the host when there is none, and the port of a remote connection; an address
+    // with a colon that is not already in brackets is bracketed
     fn read_server(connection: Option<&ConnectionInfo>, key: &mut String) -> bool {
         let Some(connection) = connection else { return false };
-        if connection.connection_type == ConnectionInfo::LOCAL
-            || connection.connection_type == ConnectionInfo::UNDEFINED
-        {
+        if connection.kind != ConnectionKind::Remote {
             return false;
         }
         let address = if connection.url.is_empty() { &connection.host } else { &connection.url };
-        if address.is_empty() || connection.port <= 0 {
+        if address.is_empty() || connection.port == 0 {
             return false;
         }
         let bracket = address.contains(':') && !address.starts_with('[');
@@ -230,8 +234,18 @@ impl WorldKeyReader {
         self.last_logged.clear();
         self.last_logged.push_str(key);
         self.logged += 1;
-        let kind = key.split(':').next().unwrap_or_default();
-        curia::info!("world key", { kind: kind, key: key, in_realm: in_realm, reads: self.attempts });
+        self.fresh = true;
+        self.last_in_realm = in_realm;
+    }
+
+    // the key chosen since the last call that was not the key logged last, with its kind, whether the game said it
+    // was in a Realm and the reads it took, for the caller's log line; None when no new key was chosen
+    pub fn take_chosen(&mut self) -> Option<(&str, &str, bool, u32)> {
+        if !std::mem::take(&mut self.fresh) {
+            return None;
+        }
+        let kind = self.last_logged.split(':').next().unwrap_or_default();
+        Some((kind, &self.last_logged, self.last_in_realm, self.attempts))
     }
 }
 

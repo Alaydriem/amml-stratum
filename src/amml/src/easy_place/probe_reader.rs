@@ -1,85 +1,83 @@
-use std::ffi::c_void;
-
-use amml_game::BlockPos;
+use amml_api::{BlockPos, BlockSource, Face as ApiFace, GameMode, GameType, HitResult, LocalPlayer};
 use stratum_core::structs::block::Face;
 use stratum_core::structs::easy_place::{GameMode as UseGameMode, UseHit, UseProbe};
 
-use crate::game::{GameMode, PlayerView, WorldBlocks};
-
-/// Reads the player's view for one use call: the eye, the view direction, the cells the player's box fills, the reach,
-/// the game mode and the hit. The hit is the first block on the view ray within reach that cannot be built over, so a
-/// ghost spot behind grass is not reached through a wall; with no such block it is the game's own hit when that is a
-/// block. Read-only, and it does not allocate. The time, the press flags and the swap answer are the caller's.
+/// Reads the player's view for one use call: the head, the view direction, the cells the player's box fills, the
+/// reach, the game mode and the hit. The hit is the first block on the view ray within reach that cannot be built
+/// over, so a ghost spot behind grass is not reached through a wall; with no such block it is the game's own hit when
+/// that is a block. Read-only, and it does not allocate. The time, the press flags and the swap answer are the
+/// caller's.
 pub struct ProbeReader;
 
 impl ProbeReader {
     // the most cell crossings one walk makes; a reach of 12 crosses at most 3 * 13 cells
     const MAX_CROSSINGS: usize = 64;
-    // GameType: Survival 0, Creative 1
-    const SURVIVAL: i32 = 0;
-    const CREATIVE: i32 = 1;
-    // HitResultType::Tile
-    const TILE: i32 = 0;
     const MIN_LENGTH: f64 = 1e-9;
     // the face a ray enters a cell through, by the axis it stepped on and whether the step was positive: a step to +X
     // enters through the cell's West face
     const ENTERED_FACE: [[Face; 2]; 3] = [[Face::West, Face::East], [Face::Down, Face::Up], [Face::North, Face::South]];
 
-    /// Fills the view fields of `probe` from the game.
-    ///
-    /// # Safety
-    /// `region` must be the live `BlockSource` of the world the view's player is in.
-    #[allow(unsafe_code)]
-    pub unsafe fn read(
-        view: &PlayerView,
-        blocks: &WorldBlocks,
-        region: *mut c_void,
-        game_mode: &GameMode,
-        probe: &mut UseProbe,
-    ) {
-        let eye = view.eye();
-        let dir = view.view_vector(1.0);
-        probe.eye = eye.map(f64::from);
-        let dir = dir.map(f64::from);
+    /// Fills the view fields of `probe` from the loader's reads of the player.
+    pub fn read(player: &LocalPlayer<'_>, source: &BlockSource<'_>, game_mode: &GameMode<'_>, probe: &mut UseProbe) {
+        let head = player.head_position().unwrap_or_default();
+        let dir = player.view_vector().unwrap_or_default();
+        probe.eye = [f64::from(head.x), f64::from(head.y), f64::from(head.z)];
+        let dir = [f64::from(dir.x), f64::from(dir.y), f64::from(dir.z)];
         let length = (dir[0] * dir[0] + dir[1] * dir[1] + dir[2] * dir[2]).sqrt();
+        probe.dir = [0.0; 3];
         if length > Self::MIN_LENGTH {
             probe.dir = dir.map(|axis| axis / length);
         }
-        Self::read_body(view, probe);
-        probe.reach = f64::from(game_mode.max_pick_range());
-        probe.game_mode = match view.game_type() {
-            Some(Self::SURVIVAL) => UseGameMode::Survival,
-            Some(Self::CREATIVE) => UseGameMode::Creative,
+        probe.body = player
+            .aabb()
+            .and_then(|aabb| Self::body([aabb.min.x, aabb.min.y, aabb.min.z], [aabb.max.x, aabb.max.y, aabb.max.z]));
+        probe.reach = f64::from(game_mode.max_pick_range().unwrap_or(0.0));
+        probe.game_mode = match player.game_type() {
+            Some(GameType::Survival) => UseGameMode::Survival,
+            Some(GameType::Creative) => UseGameMode::Creative,
             _ => UseGameMode::Other,
         };
         probe.hit = None;
-        // SAFETY: forwarded to the caller
-        if length > Self::MIN_LENGTH && unsafe { Self::walk(blocks, region, probe) } {
+        if length > Self::MIN_LENGTH && Self::walk(|pos| Self::replaceable(source, pos), probe) {
             return;
         }
-        // SAFETY: forwarded to the caller
-        unsafe { Self::game_hit(view, blocks, region, probe) };
+        Self::game_hit(player, source, probe);
     }
 
-    // the cells the player's box overlaps, both inclusive; a box face on a cell edge does not reach into the next cell
-    fn read_body(view: &PlayerView, probe: &mut UseProbe) {
-        let Some(body) = view.body() else {
-            probe.body = None;
-            return;
+    // the game's own hit, when it is a block: its cell, face and distance from the eye, and whether the block there can
+    // be built over
+    fn game_hit(player: &LocalPlayer<'_>, source: &BlockSource<'_>, probe: &mut UseProbe) {
+        let Some(HitResult::Block(hit)) = player.hit_result() else { return };
+        let face = match hit.face {
+            ApiFace::Down => Face::Down,
+            ApiFace::Up => Face::Up,
+            ApiFace::North => Face::North,
+            ApiFace::South => Face::South,
+            ApiFace::West => Face::West,
+            ApiFace::East => Face::East,
+            ApiFace::Other(_) => return,
         };
-        let mut low = [0i32; 3];
-        let mut high = [0i32; 3];
-        for axis in 0..3 {
-            low[axis] = f64::from(body.min[axis]).floor() as i32;
-            high[axis] = f64::from(body.max[axis]).ceil() as i32 - 1;
-        }
-        let ordered = (0..3).all(|axis| low[axis] <= high[axis]);
-        probe.body = ordered.then_some((low, high));
+        let point = [f64::from(hit.point.x), f64::from(hit.point.y), f64::from(hit.point.z)];
+        let distance = (0..3).map(|axis| (point[axis] - probe.eye[axis]).powi(2)).sum::<f64>().sqrt();
+        probe.hit = Some(UseHit {
+            cell: [hit.pos.x, hit.pos.y, hit.pos.z],
+            face,
+            distance,
+            replaceable: Self::replaceable(source, hit.pos),
+        });
     }
 
-    // steps the ray from the eye cell to each cell it enters, nearest first, and stops at the first cell past the reach
-    #[allow(unsafe_code)]
-    unsafe fn walk(blocks: &WorldBlocks, region: *mut c_void, probe: &mut UseProbe) -> bool {
+    /// The cells a box from `min` to `max` overlaps, both inclusive; a box face on a cell edge does not reach into the
+    /// next cell. None for a box with no cell.
+    pub fn body(min: [f32; 3], max: [f32; 3]) -> Option<([i32; 3], [i32; 3])> {
+        let low: [i32; 3] = std::array::from_fn(|axis| f64::from(min[axis]).floor() as i32);
+        let high: [i32; 3] = std::array::from_fn(|axis| f64::from(max[axis]).ceil() as i32 - 1);
+        (0..3).all(|axis| low[axis] <= high[axis]).then_some((low, high))
+    }
+
+    /// Steps the ray of `probe` from the eye cell to each cell it enters, nearest first, and sets the hit at the first
+    /// cell that is not `replaceable`; stops at the first cell past the reach. True when it hit.
+    pub fn walk(mut replaceable: impl FnMut(BlockPos) -> bool, probe: &mut UseProbe) -> bool {
         let mut cell = [0i32; 3];
         let mut step = [0i32; 3];
         let mut next = [0f64; 3];
@@ -114,9 +112,7 @@ impl ProbeReader {
             }
             cell[axis] += step[axis];
             next[axis] += delta[axis];
-            let pos = BlockPos { x: cell[0], y: cell[1], z: cell[2] };
-            // SAFETY: forwarded to the caller
-            if unsafe { blocks.replaceable(region, &pos) } {
+            if replaceable(BlockPos { x: cell[0], y: cell[1], z: cell[2] }) {
                 continue;
             }
             let face = Self::ENTERED_FACE[axis][if step[axis] > 0 { 0 } else { 1 }];
@@ -126,25 +122,8 @@ impl ProbeReader {
         false
     }
 
-    #[allow(unsafe_code)]
-    unsafe fn game_hit(view: &PlayerView, blocks: &WorldBlocks, region: *mut c_void, probe: &mut UseProbe) {
-        let Some(hit) = view.hit_result() else { return };
-        // SAFETY: the level's live HitResult, which the mirror lays out up to mPos
-        let hit = unsafe { &*hit };
-        let Some(face) = Face::ALL.get(usize::from(hit.facing)).copied() else { return };
-        if hit.kind != Self::TILE {
-            return;
-        }
-        let dx = f64::from(hit.pos[0]) - probe.eye[0];
-        let dy = f64::from(hit.pos[1]) - probe.eye[1];
-        let dz = f64::from(hit.pos[2]) - probe.eye[2];
-        // SAFETY: forwarded to the caller
-        let replaceable = unsafe { blocks.replaceable(region, &hit.block) };
-        probe.hit = Some(UseHit {
-            cell: [hit.block.x, hit.block.y, hit.block.z],
-            face,
-            distance: (dx * dx + dy * dy + dz * dz).sqrt(),
-            replaceable,
-        });
+    // a block the loader cannot read is walked through, as air is
+    fn replaceable(source: &BlockSource<'_>, pos: BlockPos) -> bool {
+        source.block(pos).and_then(|block| block.can_be_built_over()).unwrap_or(true)
     }
 }
