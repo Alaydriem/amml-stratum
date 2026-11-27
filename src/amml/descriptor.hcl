@@ -1,7 +1,7 @@
 namespace    = "alaydriem"
 name         = "stratum"
 display_name = "Stratum"
-version      = "26.63.6"
+version      = "26.63.8"
 author       = "Alaydriem"
 config_path  = "config.hcl"
 
