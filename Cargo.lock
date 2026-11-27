@@ -49,7 +49,8 @@ dependencies = [
 
 [[package]]
 name = "amm-abi"
-version = "26.63.4"
+version = "26.63.8"
+source = "git+https://github.com/Alaydriem/amml-modmanager.git?tag=26.63.8#db14b4c7681ab89fb1f278326e690ff1ad71edd4"
 dependencies = [
  "amm-core",
  "amml-api",
@@ -58,7 +59,8 @@ dependencies = [
 
 [[package]]
 name = "amm-client"
-version = "26.63.4"
+version = "26.63.8"
+source = "git+https://github.com/Alaydriem/amml-modmanager.git?tag=26.63.8#db14b4c7681ab89fb1f278326e690ff1ad71edd4"
 dependencies = [
  "amm-abi",
  "amm-core",
@@ -76,7 +78,8 @@ dependencies = [
 
 [[package]]
 name = "amm-core"
-version = "26.63.4"
+version = "26.63.8"
+source = "git+https://github.com/Alaydriem/amml-modmanager.git?tag=26.63.8#db14b4c7681ab89fb1f278326e690ff1ad71edd4"
 dependencies = [
  "amml-abi",
  "amml-api",
@@ -93,11 +96,13 @@ dependencies = [
 
 [[package]]
 name = "amml-abi"
-version = "26.63.4"
+version = "26.63.8"
+source = "git+https://github.com/Alaydriem/amml.git?tag=26.63.8#2543926489819747570600eba343985e74b327ae"
 
 [[package]]
 name = "amml-api"
-version = "26.63.4"
+version = "26.63.8"
+source = "git+https://github.com/Alaydriem/amml.git?tag=26.63.8#2543926489819747570600eba343985e74b327ae"
 dependencies = [
  "amml-abi",
  "amml-runtime",
@@ -107,7 +112,8 @@ dependencies = [
 
 [[package]]
 name = "amml-data"
-version = "26.63.4"
+version = "26.63.8"
+source = "git+https://github.com/Alaydriem/amml.git?tag=26.63.8#2543926489819747570600eba343985e74b327ae"
 dependencies = [
  "hcl-rs",
  "pelite",
@@ -117,7 +123,8 @@ dependencies = [
 
 [[package]]
 name = "amml-derive"
-version = "26.63.4"
+version = "26.63.8"
+source = "git+https://github.com/Alaydriem/amml.git?tag=26.63.8#2543926489819747570600eba343985e74b327ae"
 dependencies = [
  "amml-data",
  "clap",
@@ -131,7 +138,8 @@ dependencies = [
 
 [[package]]
 name = "amml-i18n"
-version = "26.63.4"
+version = "26.63.8"
+source = "git+https://github.com/Alaydriem/amml.git?tag=26.63.8#2543926489819747570600eba343985e74b327ae"
 dependencies = [
  "curia",
  "icu_locale_core",
@@ -144,7 +152,8 @@ dependencies = [
 
 [[package]]
 name = "amml-i18n-tool"
-version = "26.63.4"
+version = "26.63.8"
+source = "git+https://github.com/Alaydriem/amml.git?tag=26.63.8#2543926489819747570600eba343985e74b327ae"
 dependencies = [
  "amml-i18n",
  "icu_locale_core",
@@ -156,7 +165,8 @@ dependencies = [
 
 [[package]]
 name = "amml-runtime"
-version = "26.63.4"
+version = "26.63.8"
+source = "git+https://github.com/Alaydriem/amml.git?tag=26.63.8#2543926489819747570600eba343985e74b327ae"
 dependencies = [
  "amml-abi",
  "amml-data",
@@ -168,7 +178,8 @@ dependencies = [
 
 [[package]]
 name = "amml-ui"
-version = "26.63.4"
+version = "26.63.8"
+source = "git+https://github.com/Alaydriem/amml.git?tag=26.63.8#2543926489819747570600eba343985e74b327ae"
 dependencies = [
  "amml-i18n",
  "curia",
@@ -177,7 +188,8 @@ dependencies = [
 
 [[package]]
 name = "amml-ui-rules"
-version = "26.63.4"
+version = "26.63.8"
+source = "git+https://github.com/Alaydriem/amml.git?tag=26.63.8#2543926489819747570600eba343985e74b327ae"
 
 [[package]]
 name = "android_log-sys"

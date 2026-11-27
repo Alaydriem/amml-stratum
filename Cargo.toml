@@ -24,15 +24,15 @@ thiserror = "2.0.17"
 curia = "=0.2.2"
 hcl-rs = "=0.19.8"
 windows = "0.62.2"
-# Path dependencies until the release tag: AMML and the mod manager are not tagged for the v3 API yet.
-amml-api = { path = "../amml/sdk/api" }
-amml-ui = { path = "../amml/ui/kit" }
-amml-i18n = { path = "../amml/i18n/runtime" }
-amml-i18n-tool = { path = "../amml/i18n/tool" }
-amml-ui-rules = { path = "../amml/ui/rules" }
-amm-abi = { path = "../modmanager/crates/amm-abi" }
-amm-client = { path = "../modmanager/crates/amm-client", default-features = false }
-amm-core = { path = "../modmanager/crates/amm-core" }
+# AMML and the mod manager at release tag 26.63.8
+amml-api = { git = "https://github.com/Alaydriem/amml.git", tag = "26.63.8" }
+amml-ui = { git = "https://github.com/Alaydriem/amml.git", tag = "26.63.8" }
+amml-i18n = { git = "https://github.com/Alaydriem/amml.git", tag = "26.63.8" }
+amml-i18n-tool = { git = "https://github.com/Alaydriem/amml.git", tag = "26.63.8" }
+amml-ui-rules = { git = "https://github.com/Alaydriem/amml.git", tag = "26.63.8" }
+amm-abi = { git = "https://github.com/Alaydriem/amml-modmanager.git", tag = "26.63.8" }
+amm-client = { git = "https://github.com/Alaydriem/amml-modmanager.git", tag = "26.63.8", default-features = false }
+amm-core = { git = "https://github.com/Alaydriem/amml-modmanager.git", tag = "26.63.8" }
 stratum-core = { path = "src/core" }
 stratum-ui = { path = "src/ui" }
 stratum-tools = { path = "src/tools" }
@@ -40,11 +40,3 @@ stratum-tools = { path = "src/tools" }
 [workspace.lints.clippy]
 unwrap_used = "deny"
 expect_used = "deny"
-
-# amm-client takes the UI and translation crates from the amml repository by tag; these point it at the same working
-# tree as above, so one copy of each is in the build (the localizer and the egui types cross between them)
-[patch."https://github.com/Alaydriem/amml.git"]
-amml-ui = { path = "../amml/ui/kit" }
-amml-i18n = { path = "../amml/i18n/runtime" }
-amml-i18n-tool = { path = "../amml/i18n/tool" }
-amml-ui-rules = { path = "../amml/ui/rules" }
