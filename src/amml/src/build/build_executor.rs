@@ -1,126 +1,98 @@
-use std::ffi::c_void;
-
-use amml_game::GameEntries;
 use stratum_core::structs::build::BuildConditions;
 
-use crate::build::{ConditionsReader, GameBuildWorld, KindsScanner, PaletteProbe};
-use crate::services::HandleState;
-use crate::traits::{BuildCore, BuildWorld};
-use crate::types::BuildCalls;
+use crate::build::{ConditionsReader, KindsScanner, PaletteProbe};
+use crate::traits::{BuildCore, BuildWorld, CommandSink};
 
 /// Runs the build between the game and the core, once a tick after the core's tick. It decides nothing: it reads the
-/// conditions and gives them to the core, answers the core's palette and kinds requests from the game, and sends the
-/// commands the core gives, in the order it gives them. With no calls (the `stratum.build` feature is off) the
-/// conditions are all false and nothing else happens.
+/// conditions and gives them to the core, answers the core's palette and kinds requests from the game, and keeps the
+/// commands the core gives, in the order it gives them, for `take_commands`. The caller sends them after it has
+/// released its locks, because a command raises game events on the same stack. With the feature off the conditions are all false
+/// and nothing else happens.
 ///
-/// Bound: `commands` is emptied every step and holds at most the core's outbox, whose capacity the config sets.
+/// Bound: `commands` holds at most the core's outbox, whose capacity the config sets; `take_commands` empties it.
 pub struct BuildExecutor {
-    calls: Option<BuildCalls>,
+    on: bool,
     reader: ConditionsReader,
     scanner: KindsScanner,
     commands: Vec<String>,
-    // the conditions last written to the log, so a change is logged once
+    // the conditions last handed to the log, so a change is logged once
     logged: Option<BuildConditions>,
+    // a change of the conditions the caller has not logged yet
+    changed: Option<BuildConditions>,
 }
 
 impl BuildExecutor {
-    /// An executor for `calls`; None for a build whose entries are missing, which stays off.
-    pub fn new(calls: Option<BuildCalls>) -> Self {
-        Self::with_scan_rate(calls, KindsScanner::CELLS_PER_TICK)
+    /// An executor; `on` is false when an area of the build is not offered, and the build stays off.
+    pub fn new(on: bool) -> Self {
+        Self::with_scan_rate(on, KindsScanner::CELLS_PER_TICK)
     }
 
     /// As [`BuildExecutor::new`], with the cells the kinds scan reads each tick.
-    pub fn with_scan_rate(calls: Option<BuildCalls>, cells_per_tick: usize) -> Self {
+    pub fn with_scan_rate(on: bool, cells_per_tick: u32) -> Self {
         Self {
-            reader: ConditionsReader::new(calls.is_some()),
-            calls,
+            on,
+            reader: ConditionsReader::new(on),
             scanner: KindsScanner::new(cells_per_tick),
             commands: Vec::new(),
             logged: None,
+            changed: None,
         }
     }
 
-    // one log line when the conditions change, with the raw game values they come from
-    fn log_conditions(conditions: BuildConditions, world: &dyn BuildWorld) {
-        if !world.in_world() {
-            curia::info!("build conditions: not in a world", {});
-            return;
-        }
-        curia::info!("build conditions", {
-            local: conditions.local,
-            cheats: conditions.cheats,
-            operator: conditions.operator,
-            creative: conditions.creative,
-            in_realm: world.in_realm(),
-            connection_type: format!("{:?}", world.connection_type()),
-            game_type: format!("{:?}", world.game_type()),
-            permission_level: format!("{:?}", world.permission_level()),
-            commands_flag: format!("{:?}", world.commands_flag()),
-        });
-    }
-
-    /// Whether the build entries were all there.
+    /// Whether the build areas were all offered.
     pub fn is_on(&self) -> bool {
-        self.calls.is_some()
+        self.on
     }
 
-    /// One tick against the running game and the core's state.
-    ///
-    /// # Safety
-    /// `client` must be null or the live `ClientInstance` of the game build `entries` and the calls were resolved
-    /// for, live for the call.
-    #[allow(unsafe_code)]
-    pub unsafe fn tick(&mut self, client: *mut c_void, entries: &GameEntries, state: &mut HandleState) {
-        let Some(calls) = self.calls else {
-            state.set_conditions(BuildConditions::default());
-            return;
-        };
-        // SAFETY: forwarded to the caller
-        let Some(mut world) = (unsafe { GameBuildWorld::new(client, entries, &calls) }) else {
-            if self.logged != Some(BuildConditions::default()) {
-                self.logged = Some(BuildConditions::default());
-                curia::info!("build conditions: no client world for the build calls", {});
-            }
-            state.set_conditions(BuildConditions::default());
-            return;
-        };
-        self.step(&mut world, state);
+    /// The conditions, once after each change, for the log.
+    pub fn take_changed(&mut self) -> Option<BuildConditions> {
+        self.changed.take()
     }
 
-    /// One tick: the conditions to the core, the answers to its requests, then its commands to the game.
-    pub fn step(&mut self, world: &mut dyn BuildWorld, core: &mut dyn BuildCore) {
-        if self.calls.is_none() {
+    /// One tick: the conditions to the core, the answers to its requests, then its commands into the send list.
+    pub fn step(&mut self, world: &dyn BuildWorld, core: &mut dyn BuildCore) {
+        if !self.on {
             core.set_conditions(BuildConditions::default());
             return;
         }
-        let conditions = self.reader.read(&*world);
+        let conditions = self.reader.read(world);
         if self.logged != Some(conditions) {
             self.logged = Some(conditions);
-            Self::log_conditions(conditions, &*world);
+            self.changed = Some(conditions);
         }
         core.set_conditions(conditions);
         if let Some(request) = core.take_probe() {
-            core.apply_probe(PaletteProbe::answer(&*world, &request));
+            core.apply_probe(PaletteProbe::answer(world, &request));
         }
         if let Some(request) = core.take_kinds() {
             self.scanner.begin(&request);
         }
-        if let Some(answer) = self.scanner.step(&*world) {
+        if let Some(answer) = self.scanner.step(world) {
             core.apply_kinds(answer);
         }
-        self.send_commands(world, core);
+        core.take_commands(&mut self.commands);
     }
 
-    // sends what the core wants sent; the first command that is not sent stops the rest and tells the core
-    fn send_commands(&mut self, world: &mut dyn BuildWorld, core: &mut dyn BuildCore) {
-        self.commands.clear();
-        core.take_commands(&mut self.commands);
-        for command in &self.commands {
-            if !world.send(command) {
-                core.send_failed();
-                break;
-            }
+    /// The kept commands, oldest first, for the caller to send once its locks are released; empty when none wait.
+    /// Hand the list back with `give_back` so its buffer is used again.
+    pub fn take_commands(&mut self) -> Vec<String> {
+        if self.commands.is_empty() {
+            return Vec::new();
         }
-        self.commands.clear();
+        std::mem::take(&mut self.commands)
+    }
+
+    /// The list `take_commands` gave, emptied, for the next tick.
+    pub fn give_back(&mut self, mut commands: Vec<String>) {
+        commands.clear();
+        if self.commands.is_empty() {
+            self.commands = commands;
+        }
+    }
+
+    /// Sends `commands` in order; the first command that is not sent stops the rest, which are dropped, and gives
+    /// false: the caller tells the core.
+    pub fn send(sink: &mut dyn CommandSink, commands: &[String]) -> bool {
+        commands.iter().all(|command| sink.send(command))
     }
 }

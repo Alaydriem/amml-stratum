@@ -7,6 +7,7 @@ pub mod command_sink;
 pub mod dialog_runner;
 pub mod palette_game;
 pub mod use_core;
+pub mod use_core_holder;
 pub mod world_source;
 
 pub use block_grid::BlockGrid;
@@ -18,4 +19,5 @@ pub use command_sink::CommandSink;
 pub use dialog_runner::DialogRunner;
 pub use palette_game::PaletteGame;
 pub use use_core::UseCore;
+pub use use_core_holder::UseCoreHolder;
 pub use world_source::WorldSource;

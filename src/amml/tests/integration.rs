@@ -2,11 +2,8 @@
 
 mod build;
 mod descriptor;
-mod detours;
 mod easy_place;
-mod game;
-pub mod ghost;
+mod ghost;
 mod services;
 mod stratum_mod;
 mod support;
-mod types;

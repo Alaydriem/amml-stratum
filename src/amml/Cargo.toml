@@ -13,15 +13,14 @@ name = "alaydriem_stratum"
 crate-type = ["cdylib", "rlib"]
 
 [features]
-# on the first render frame in a world, builds and draws one stone mesh and looks up one block by NBT
+# the in-game proof: on the first world, one stone mesh, the block lookups, one chest and one skull ghost and, with the
+# build conditions true, one palette probe, one kinds scan and one setblock
 gate = []
 
 [dependencies]
-amm-client.workspace = true
-amm-core.workspace = true
-amml-game.workspace = true
-amml-msvc.workspace = true
-amml-sdk.workspace = true
+amm-client = { workspace = true, features = ["egui"] }
+amm-core = { workspace = true, features = ["egui"] }
+amml-api.workspace = true
 crossbeam-channel.workspace = true
 curia.workspace = true
 egui.workspace = true
@@ -32,7 +31,6 @@ windows = { workspace = true, features = [
   "Win32_Foundation",
   "Win32_System_Com",
   "Win32_System_Threading",
-  "Win32_UI_Input_KeyboardAndMouse",
   "Win32_UI_Shell",
   "Win32_UI_Shell_Common",
   "Win32_UI_WindowsAndMessaging",
@@ -40,7 +38,8 @@ windows = { workspace = true, features = [
 
 [dev-dependencies]
 amm-abi.workspace = true
-amm-client = { workspace = true, features = ["test-support"] }
+amm-client = { workspace = true, features = ["egui", "test-support"] }
+amml-api = { workspace = true, features = ["test"] }
 amml-ui.workspace = true
 hcl-rs.workspace = true
 tempfile.workspace = true
@@ -51,3 +50,7 @@ path = "tests/integration.rs"
 
 [lints]
 workspace = true
+
+[[example]]
+name = "write_manifest"
+path = "examples/write_manifest.rs"

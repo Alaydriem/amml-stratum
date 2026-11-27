@@ -1,12 +1,12 @@
 use std::collections::VecDeque;
-use std::path::Path;
 use std::sync::Arc;
 
-use amm_client::link::{ApiTable, EventDrain, ManagerLink};
+use amm_client::link::{EventDrain, ManagerLink};
 use amm_core::errors::LinkError;
 use amm_core::structs::descriptor::Capability;
 use amm_core::structs::event::{KeybindPhase, ModEvent};
 use amm_core::structs::lease::AcquireOutcome;
+use amml_api::{Ctx, Input};
 use stratum_core::config::StratumConfig;
 use stratum_core::structs::frame::FrameStatus;
 use stratum_core::structs::hud::HudKey;
@@ -17,12 +17,14 @@ use super::{CloseReason, FrameRouter, SharedUi};
 // closing the library, and holds the Overlay lease, the Input lease and the free cursor exactly while it is open.
 // A denied Input lease leaves the library open, and the keys of the other mod stay live. It holds the WorldDraw
 // lease while the ghost has a marker to draw, and the Hud lease while a marker is active with no game screen, no
-// library and no Input held by another mod. A lease that is suspended, revoked or denied is asked for again
+// library and no input lease of another mod. A lease that is suspended, revoked or denied is asked for again
 // `WORLD_DRAW_RETRY_SECONDS` or `HUD_RETRY_SECONDS` later, or at once on a resume. The HUD keybinds are live
 // only while the Hud lease is held; their presses wait in a bounded queue for the tick. It reads the config
 // again on each SettingsChanged and hands it to the tick.
 pub struct ManagerSession {
     link: ManagerLink,
+    // the loader's input service, which tells the leases of the other mods
+    input: Input,
     shared: Arc<SharedUi>,
     // Events of one poll, at most one drain buffer, sized once in connect.
     pending: Vec<ModEvent>,
@@ -60,7 +62,7 @@ pub struct ManagerSession {
 }
 
 impl ManagerSession {
-    const DESCRIPTOR: &'static str = include_str!("../../descriptor.hcl");
+    pub const DESCRIPTOR: &'static str = include_str!("../../descriptor.hcl");
     // The index of the `open_library` keybind in the descriptor.
     pub const OPEN_LIBRARY_ACTION: u16 = 0;
     // The indexes of the HUD keybinds in the descriptor.
@@ -73,13 +75,17 @@ impl ManagerSession {
     pub const HUD_RETRY_SECONDS: f64 = 2.0;
     pub const PICKER_SETTLE_SECONDS: f64 = 2.0;
 
-    // Registers the mod with `FrameRouter` as its egui pass: the library on the Overlay layer, the HUD card on the
-    // Hud layer. `config_dir` is the mod's own config
-    // folder, an absolute path. The library opens only with the `open_library` key.
-    pub fn connect(table: ApiTable, config_dir: &Path, shared: Arc<SharedUi>) -> Result<Self, LinkError> {
-        let link = ManagerLink::new(table, Self::DESCRIPTOR, config_dir, FrameRouter::new(Arc::clone(&shared)))?;
-        Ok(Self {
+    // Starts the link with `FrameRouter` over `shared` as the mod's egui pass: the library on the Overlay layer, the
+    // HUD card on the Hud layer. Call it in `enable`; the link connects itself once the manager's tables are there.
+    pub fn start_link(ctx: &Ctx, shared: &Arc<SharedUi>) -> Result<ManagerLink, LinkError> {
+        ManagerLink::start(ctx, Self::DESCRIPTOR, Some(FrameRouter::new(Arc::clone(shared))))
+    }
+
+    // The session of a connected link. The library opens only with the `open_library` key.
+    pub fn new(link: ManagerLink, shared: Arc<SharedUi>, input: Input) -> Self {
+        Self {
             link,
+            input,
             shared,
             pending: Vec::with_capacity(EventDrain::CAPACITY),
             is_open: false,
@@ -99,7 +105,7 @@ impl ManagerSession {
             was_picker_busy: false,
             picker_settled_at: f64::NEG_INFINITY,
             reopen_pending: false,
-        })
+        }
     }
 
     // The manager's checked config.hcl; None, with a warning, when it cannot be read.
@@ -271,16 +277,16 @@ impl ManagerSession {
     }
 
     // Holds the Hud lease exactly while a marker is active, the game is in a world with no game screen and no
-    // library, no other mod holds Input and the mod is enabled. Anything else gives it back at once, which also
-    // drops the queued keys. A shared Overlay of another mod does not matter. The manager has no query for an
-    // exclusive Overlay held by another mod, so that case is not detected here.
+    // library, no other mod holds an input lease and the mod is enabled. Anything else gives it back at once, which also
+    // drops the queued keys. A shared Overlay of another mod does not matter. The manager has no query for an exclusive
+    // Overlay held by another mod, so that case is not detected here.
     pub fn sync_hud(&mut self, has_marker: bool, status: &FrameStatus) {
         let live = has_marker
             && status.in_world
             && !status.menu_open
             && !self.is_open
             && self.is_enabled
-            && !self.link.held_by_other(Capability::Input);
+            && !self.input.held_by_others().is_some_and(|held| held.any());
         if !live {
             self.hud_keys.clear();
             self.hud_held = 0;

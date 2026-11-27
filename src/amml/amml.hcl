@@ -1,168 +1,208 @@
 namespace   = "alaydriem"
 name        = "stratum"
 entry       = "alaydriem_stratum.dll"
-api_version = 2
-amml_version = "26.60.6"
-entries = [
-  # required: the ghost build and draw
-  "LevelRenderer.renderLevel",
-  "LevelRenderer.mAtlasTexture",
-  "FrameRenderObject.mViews",
-  "ClientInstance.getItemInHandRenderer",
-  "ItemInHandRenderer.mMatBlendBlock",
-  "Tessellator.begin",
-  "Tessellator.end",
-  "Tessellator.clear",
-  "Tessellator.mTessellating",
-  "Mesh.moveCtor",
-  "Mesh.dtor",
-  "Mesh.isValid",
-  "Mesh.renderMesh",
-  "Mesh.size",
-  "MeshData.clear",
-  "MeshData.dtor",
-  "MeshData.moveAssign",
-  "BlockTessellator.ctor",
-  "BlockTessellator.dtor",
-  "BlockTessellator.setRegion",
-  "BlockTessellator.tessellateInWorld",
-  "BlockTessellator.mBlockCache",
-  "BlockTessellatorCache.getBlock",
-  "ActorShaderManager.setEntityConstants",
-  "GlobalConstantBuffers.entityConstantBuffer",
-  "MatrixStack.push",
-  "MatrixStackRef.dtor",
-  # required: the palette lookups, the block turn and the tint
-  "BlockTypeRegistry.instance",
-  "BlockTypeRegistry.lookupByName",
-  "StringByteInput.vtable",
-  "NbtIo.read",
-  "BlockSerializationUtils.tryGetBlockFromNBT",
-  "CompoundTag.dtor",
-  "BlockGraphics.getForBlock",
-  "Block.getRenderLayer",
-  "BlockType.getExtraRenderLayers",
-  "VanillaBlockStateTransformUtils.transformBlock",
-  "VanillaBlockStateTransformUtils.hasTransformableWallStates",
-  "VanillaBlockStateTransformUtils.transformWallConnectionTypes",
-  "VanillaBlockStateTransformUtils.hasTransformableConnectionStates",
-  "VanillaBlockStateTransformUtils.transformConnectionStates",
-  "BlockSource.getBlock",
-  "BiomeColorSampling.getTessellationPolicy",
-  "TessellationPolicy.get",
-  "BlockType.mTintMethod",
-  # required: the block listener on the client region
-  "BlockSourceListener.vtable",
-  "BlockSourceListener.onSourceDestroyed",
-  "BlockSourceListener.onBlockChanged",
-  "BlockSource.addListener",
-  "BlockSource.removeListener",
-  # required: the client, the player's position, the camera and the tessellator of a ScreenContext
-  "ClientInstance.update",
-  "ClientInstance.getLocalPlayer",
-  "ClientInstance.isWorldActive",
-  "ClientInstance.getRegion",
-  "Actor.stateVectorComponent",
-  "Actor.actorRotationComponent",
-  "StateVectorComponent.mPos",
-  "ActorRotationComponent.mRot",
-  "Camera.mForward",
-  "ViewRenderObject.mViewData",
-  "ViewRenderData.mCameraPos",
-  "ScreenContext.tessellator",
-  # required: the world key of the data folder
-  "ClientInstance.getLevel",
-  "ClientInstance.isInRealm",
-  "ClientLevel.getLevelData",
-  "Level.getLevelSeed64",
-  "LevelData.mLevelName",
-  "GameConnectionInfo.size",
-  "GameConnectionInfo.dtor",
-  # required: the frame status of each tick and the focus loss
-  "ClientInstance.isShowingMenu",
-  "ClientInstance.getOptions",
-  "IOptionRegistry.getViewDistanceChunks",
-  "Actor.getDimension",
-  "Dimension.getDimensionId",
-  "MinecraftGame.onAppFocusLost",
-  # optional, stratum.connection
-  "ClientInstance.getGameConnectionInfo",
-  # optional, stratum.world_folder
-  "DBStorage.ctor",
-  "DBStorage.checkShutdownDone",
-  # optional, stratum.water_tint
-  "BlockSource.getChunk",
-  "LevelChunk.getBiome",
-  "BiomeColorSampling.getWaterColor",
-  # optional, stratum.block_actors
-  "LevelRendererCamera.renderBlockEntitiesBody",
-  "LevelRendererPlayer.vtable",
-  "BlockActorRenderDispatcher.render",
-  "BaseActorRenderContext.mBlockEntityRenderDispatcher",
-  "BaseActorRenderContext.mImpl",
-  "BaseActorRenderContext.Impl.mCameraTargetPosition",
-  "VanillaBlockActorFactory.createBlockActor",
-  "BlockActor.loadStatic",
-  "BlockActor._getRenderComponent",
-  "DefaultDataLoadHelper.vtable",
-  # optional, stratum.large_chests
-  "BlockActor.mPosition",
-  "BlockActor.isType",
-  "ChestBlockActor.mPairFlags",
-  "ChestBlockActor.mLargeChestPaired",
-  "ChestBlockActor.mLargeChestPairedPosition",
-  # optional, stratum.skulls
-  "SkullBlockRenderer.renderSkull",
-  "BlockType.mNameInfo.mFullName",
-  # optional, stratum.build (the block type name and the chunk lookup are also listed for skulls and water_tint)
-  "CommandRequestPacket.mCommand",
-  "CommandRequestPacket.size",
-  "Player.getPlayerPermissionLevel",
-  "LevelData.mCommandsEnabled",
-  # required: easy place, the build hooks, the probe, the inventory and the item stack request
-  "LegacyClientNetworkHandler.vtable",
-  "ClientNetworkHandler.handle.ItemStackResponsePacket",
-  "ClientNetworkHandler.handle.ContainerOpenPacket",
-  "ClientNetworkHandler.handle.ContainerClosePacket",
-  "ClientInputCallbacks.handleBuildAction",
-  "GameMode.vtable",
-  "GameMode.buildBlock",
-  "GameMode.mPlayer",
-  "GameMode.getMaxPickRange",
-  "HudScreenController.vtable",
-  "HudScreenController.tick",
-  "HudScreenController.handleSlotSelection",
-  "ScreenController.dtor",
-  "ClientInstance.getPacketSender",
-  "PacketSender.send",
-  "Actor.getViewVector",
-  "Actor.getAttachPos",
-  "Actor.getRuntimeID",
-  "Actor.mLevel",
-  "Actor.aabbShapeComponent",
-  "Player.getPlayerGameType",
-  "Player.playerInventory",
-  "Level.getHitResult",
-  "Level.getItemRegistry",
-  "ItemRegistryRef.getCreativeItemRegistry",
-  "CreativeItemRegistry.mCreativeItems",
-  "BlockType.canBeBuiltOver",
-  "BlockType.isInteractiveBlock",
-  "BlockType.asItemInstance",
-  "FillingContainer.swapSlots",
-  "FillingContainer.setItem",
-  "ItemStack.emptyCtor",
-  "ItemStack.copyCtor",
-  "ItemStack.vtable",
-  "ItemStack.reinit",
-  "ItemStackBase.dtor",
-  "ItemStackBase.getMaxStackSize",
-  "MinecraftPackets.createPacket",
-  "ClientNetworkHandler.vtable",
-  "Packet.read",
-  "ReadOnlyBinaryStream.vtable",
-  "ReadOnlyBinaryStream.dtor",
-]
+api_version = 3
+
+uses {
+  feature "core" {
+    event "client.tick" {
+      version  = 1
+      required = true
+    }
+    event "world.joined" {
+      version  = 1
+      required = true
+    }
+    event "world.left" {
+      version  = 1
+      required = true
+    }
+    event "world.dimension_changing" {
+      version  = 1
+      required = true
+    }
+    event "world.server_join_starting" {
+      version  = 2
+      required = true
+    }
+    event "registry.provider_ready" {
+      version  = 1
+      required = true
+    }
+    event "registry.provider_gone" {
+      version  = 1
+      required = true
+    }
+    event "mods.loaded" {
+      version  = 1
+      required = true
+    }
+    event "input.lease_suspended" {
+      version  = 1
+      required = true
+    }
+    event "input.lease_resumed" {
+      version  = 1
+      required = true
+    }
+    event "input.lease_lost" {
+      version  = 1
+      required = true
+    }
+    event "input.injected_released" {
+      version  = 2
+      required = true
+    }
+    event "overlay.screenshot_taken" {
+      version  = 1
+      required = true
+    }
+    event "overlay.screenshot_written" {
+      version  = 1
+      required = true
+    }
+    area "input.lease" {
+      version  = 1
+      required = true
+    }
+    area "client.read" {
+      version  = 1
+      required = true
+    }
+    area "client.world_info" {
+      version  = 1
+      required = true
+    }
+    area "actor.read" {
+      version  = 4
+      required = true
+    }
+    area "options.view_distance" {
+      version  = 1
+      required = true
+    }
+  }
+  feature "ghost" {
+    event "render.world_rendered" {
+      version  = 1
+      required = true
+    }
+    area "render.world_canvas" {
+      version  = 3
+      required = true
+    }
+    area "render.block_mesher" {
+      version  = 1
+      required = true
+    }
+    area "world.block_states" {
+      version  = 1
+      required = true
+    }
+    area "render.water_tint" {
+      version  = 1
+      required = true
+    }
+  }
+  feature "block_changes" {
+    event "world.block_changed" {
+      version  = 2
+      required = true
+    }
+  }
+  feature "block_entities" {
+    event "render.block_entity_pass" {
+      version  = 1
+      required = true
+    }
+    area "render.block_entities" {
+      version  = 1
+      required = true
+    }
+    area "render.chest_pair" {
+      version  = 1
+      required = true
+    }
+    area "render.skull_pose" {
+      version  = 1
+      required = true
+    }
+  }
+  feature "easy_place" {
+    event "player.use_pressed" {
+      version  = 1
+      required = true
+    }
+    event "player.build_block" {
+      version  = 1
+      required = true
+    }
+    event "inventory.request_done" {
+      version  = 1
+      required = true
+    }
+    event "input.mouse" {
+      version  = 1
+      required = true
+    }
+    event "window.focus" {
+      version  = 1
+      required = true
+    }
+    area "world.blocks" {
+      version  = 1
+      required = true
+    }
+    area "player.build" {
+      version  = 1
+      required = true
+    }
+    area "player.pick_range" {
+      version  = 1
+      required = true
+    }
+    area "player.hit_result" {
+      version  = 1
+      required = true
+    }
+    area "hud.select_hotbar" {
+      version  = 1
+      required = true
+    }
+    area "inventory.read" {
+      version  = 3
+      required = true
+    }
+    area "inventory.request" {
+      version  = 2
+      required = true
+    }
+  }
+  feature "picker" {
+    event "client.app_focus_lost" {
+      version  = 1
+      required = true
+    }
+  }
+  feature "build" {
+    area "client.send_command" {
+      version  = 1
+      required = true
+    }
+    area "actor.game_type" {
+      version  = 1
+      required = true
+    }
+    area "actor.permission" {
+      version  = 1
+      required = true
+    }
+    area "world.kinds_in_box" {
+      version  = 1
+      required = true
+    }
+  }
+}
 
 listing {
   title       = "Stratum"

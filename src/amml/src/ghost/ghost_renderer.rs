@@ -1,42 +1,48 @@
-use std::ffi::c_void;
-use std::ptr::NonNull;
 use std::sync::Arc;
 use std::time::Instant;
 
-use amml_game::{BlockPos, ClientInstance, GameEntries, RawObject, RenderCamera};
-use stratum_core::structs::ghost::{GhostBlockEntityTable, GhostJob, GhostJobMode, SlotBuilt};
-
-use crate::game::{OwnedMesh, ScreenContext, Tessellator, TexturePtrLayout, TextureVariant};
-use crate::ghost::{
-    BlockActorCell, BlockActorDrawer, BlockActorKey, BlockResolver, GhostGroupBuffer, GhostTessellator, SkullSlot,
+use amml_api::amml_abi::{AmmlStatus, BlockEntityPass, WorldRendered};
+use amml_api::{
+    ApiError, BlockEntities, BlockEntityCamera, BlockEntityGhost, BlockEntityPassExt, BlockGrid, BlockHandle,
+    BlockMesher, BlockPos, Blocks, GhostEntityOptions, MeshId, MesherOptions, Transform, Vec3, WorldCanvas,
+    WorldRenderedExt,
 };
-use crate::services::{GhostTake, SharedGhost};
-use crate::types::{BlockActorCalls, GhostBuilt, GhostCalls, GhostWorld, GroupStep, PlayerSpot};
+use stratum_core::structs::ghost::{GhostBlockEntity, GhostBlockEntityTable, GhostJob, GhostJobMode, SlotBuilt};
 
-/// The ghost on the render thread: each frame it takes the frame core published, frees and builds the mesh slots it
-/// lists, draws the listed slots that are in view see-through over the world, farthest first, and reports what it
-/// built and how many it left out of view. What to build and draw is core's; the renderer holds only the slot table
-/// and its per-slot scratch, sized once to core's slot capacity, and the palette's block lookups.
+use crate::ghost::{BlockActorCell, BlockActorKey, BlockActorPool, BlockResolver, GroupTracker, SkullPoseMap};
+use crate::services::{GhostTake, SharedGhost};
+use crate::types::GroupStep;
+
+/// The ghost in the world render: each `WorldRendered` it takes the frame core published, frees and builds the mesh
+/// slots it lists with the loader's block mesher, draws the listed slots that are in view see-through over the world,
+/// farthest first, and reports what it built and how many it left out of view. What to build and draw is core's; the
+/// renderer holds only the slot table of mesh ids and its per-slot scratch, sized once to core's slot capacity, and
+/// the palette's block handles.
 ///
-/// The block-entity cells of each slot's job are kept with the slot and drawn by the block actor drawer in the game's
-/// block-entity pass, for the full-size slots that were in view in the last frame.
+/// Every mesh is built from the job's padded grid, so a mesh point sits one cell above the job's first cell on each
+/// axis; a group append is placed the same way, and every draw moves the mesh back by one cell.
+///
+/// The block-entity cells of each slot's job are kept with the slot and drawn as the loader's block entity ghosts in
+/// the game's block-entity pass, for the full-size slots that were in view in the last frame.
 ///
 /// Bound: the slot table and every per-slot vector hold `slot_capacity` entries, which changes only with the config;
-/// each slot's block-entity cells are at most the cells of one job, which fits one tessellator window; the block
-/// lookups hold one entry per palette id; the drawer's actor pool has its own bound.
+/// each slot's block-entity cells are at most the cells of one job; the palette holds one handle per palette id; the
+/// ghost pool has its own bound.
 pub struct GhostRenderer {
-    calls: GhostCalls,
-    // the world the slots, the blocks and the tessellator belong to; null outside a world
-    region: *mut c_void,
+    // the loader epoch of the world the slots and handles belong to; 0 outside a world
+    epoch: u64,
+    // core's world epoch the slots belong to
+    core_epoch: u64,
     usable: bool,
+    // a dimension change since the last frame: the next frame joins again
+    rejoin: bool,
+    // frames since the last try to make a joined world usable
+    retry_frames: u32,
+    water_tint: bool,
     blocks: BlockResolver,
-    tessellator: GhostTessellator,
-    slots: Vec<Option<OwnedMesh>>,
-    // the mini ghost group being built and each slot's last finished group
-    group: GhostGroupBuffer,
-    // the generation the group buffer belongs to
+    slots: Vec<Option<MeshId>>,
+    group: GroupTracker,
     generation: u64,
-    // one entry per job of a frame, at most one per slot
     built: Vec<SlotBuilt>,
     // per slot: the built box in cells, and its squared distance this frame
     sizes: Vec<[u32; 3]>,
@@ -45,48 +51,48 @@ pub struct GhostRenderer {
     order: Vec<u32>,
     culled: u32,
     meshes_drawn: u32,
-    // set on a join, cleared once a report has carried it
+    // set on a join or when the loader dropped the meshes, cleared once a report has carried it
     world_reset: bool,
-    // core's world epoch the slots, the blocks and the tessellator belong to
-    world_epoch: u64,
-    // this frame resolved a palette; its fallback counts go in the report
     palette_resolved: bool,
-    // this frame's build time, the sum of its jobs, and its built and skipped cells
     build_us: u64,
     cells_built: u32,
     skipped_cells: u32,
-    drawer: BlockActorDrawer,
-    // the block entity NBT of the palette in use
+    // a build or draw error was logged since the last join, so each kind is logged once per world
+    build_error_logged: bool,
+    draw_error_logged: bool,
+    pool: BlockActorPool<BlockEntityGhost>,
     table: Option<Arc<GhostBlockEntityTable>>,
-    // per slot: each block-entity cell the build kept, its key, its position from the job's origin and its skull pose
     entity_cells: Vec<Vec<BlockActorCell>>,
     // the last frame's full-size slots in view that hold block-entity cells, farthest first, each with the world
     // position its job's origin is drawn at
     visible: Vec<(u32, [i32; 3])>,
 }
 
-// SAFETY: the raw game pointers and the meshes are used on the render thread only, under the runtime's lock; another
-// thread only moves the renderer, it never calls through it
-#[allow(unsafe_code)]
-unsafe impl Send for GhostRenderer {}
-
 impl GhostRenderer {
     /// What core counts a built mesh's GPU memory at: the measured vertex size on the GPU.
     pub const GPU_BYTES_PER_VERTEX: u64 = 20;
     /// A group mesh's own index buffer holds 32-bit indices.
     pub const INDEX_BYTES: u64 = 4;
+    const VERTICES_PER_QUAD: u64 = 4;
+    const INDICES_PER_QUAD: u64 = 6;
+    // the quads an appended cell is counted at before its group is finished: a full cube
+    const QUADS_PER_CELL: u64 = 6;
     const ALPHA_MAX: f32 = 255.0;
     const CORNERS: usize = 8;
+    // the frames between two tries to make a joined world usable: its blocks can be found later than the join
+    const RETRY_FRAMES: u32 = 60;
 
-    pub fn new(calls: &GhostCalls) -> Self {
+    pub fn new(water_tint: bool) -> Self {
         Self {
-            calls: *calls,
-            region: std::ptr::null_mut(),
+            epoch: 0,
+            core_epoch: 0,
             usable: false,
-            blocks: BlockResolver::new(calls),
-            tessellator: GhostTessellator::new(calls),
+            rejoin: false,
+            retry_frames: 0,
+            water_tint,
+            blocks: BlockResolver::new(),
             slots: Vec::new(),
-            group: GhostGroupBuffer::new(calls),
+            group: GroupTracker::new(),
             generation: 0,
             built: Vec::new(),
             sizes: Vec::new(),
@@ -95,175 +101,51 @@ impl GhostRenderer {
             culled: 0,
             meshes_drawn: 0,
             world_reset: false,
-            world_epoch: 0,
             palette_resolved: false,
             build_us: 0,
             cells_built: 0,
             skipped_cells: 0,
-            drawer: BlockActorDrawer::new(calls),
+            build_error_logged: false,
+            draw_error_logged: false,
+            pool: BlockActorPool::new(),
             table: None,
             entity_cells: Vec::new(),
             visible: Vec::new(),
         }
     }
 
-    /// After `LevelRenderer::renderLevel`'s own drawing: reads the world and the camera from the game, then runs the
-    /// frame. `client` is the client the tick saw last.
-    ///
-    /// # Safety
-    /// `renderer`, `screen` and `frame` must be the live arguments of the running `renderLevel` call, and `client`
-    /// null or the live client of the game.
-    #[allow(unsafe_code)]
-    pub unsafe fn after_render_level(
+    /// One `WorldRendered`: take, free, build, cull and sort, draw, report, in the order the C++ renderer did them.
+    /// `epoch` is the loader's world epoch of the event.
+    pub fn frame(
         &mut self,
-        entries: &GameEntries,
-        client: Option<NonNull<c_void>>,
-        renderer: *mut c_void,
-        screen: *mut c_void,
-        frame: *const c_void,
+        event: &WorldRendered,
+        epoch: u64,
+        blocks: &Blocks,
+        entities: &BlockEntities,
         ghost: &SharedGhost,
     ) {
-        // SAFETY: the ScreenContext of the running render call
-        let Some(screen) = (unsafe { ScreenContext::from_raw(screen, &self.calls) }) else { return };
-        // SAFETY: forwarded to the caller
-        let world = unsafe { self.world_of(entries, client, renderer) };
-        // SAFETY: forwarded to the caller
-        let camera = unsafe { self.camera_of(entries, frame) }.unwrap_or([0.0; 3]);
-        self.run_frame(world.as_ref(), &screen, ghost, camera);
-    }
-
-    /// After the player camera's own block-entity pass: draws the block-entity cells of the last frame's visible
-    /// slots in the client's current region, with the level of `client` for the actors loaded from NBT. The pass runs
-    /// inside `renderLevel`, before this frame's `run_frame`, so the current region is read here and nothing is drawn
-    /// unless it is still the joined one.
-    ///
-    /// # Safety
-    /// `calls` must hold the entries of the running build, `ctx` must be the live `BaseActorRenderContext` of the
-    /// running pass, and `client` null or the live client of the game.
-    #[allow(unsafe_code)]
-    pub unsafe fn after_render_block_entities(
-        &mut self,
-        entries: &GameEntries,
-        calls: &BlockActorCalls,
-        ghost: &SharedGhost,
-        skull: &SkullSlot,
-        client: Option<NonNull<c_void>>,
-        ctx: *mut c_void,
-    ) {
-        if self.visible.is_empty() || self.region.is_null() || !self.usable {
-            return;
-        }
-        let Some(client) = client else { return };
-        // SAFETY: the client the update detour saw, live while the game runs
-        let Some(game_client) = (unsafe { ClientInstance::from_raw(client.as_ptr(), entries) }) else { return };
-        let Some(region) = game_client.region() else { return };
-        let level = {
-            let client = client.as_ptr();
-            // SAFETY: the client the update detour saw, live while the game runs; the entry is the getLevel slot
-            let function = unsafe { RawObject::slot(client, calls.get_level_slot) };
-            // SAFETY: the slot holds `ClientLevel* ClientInstance::getLevel()`; the ClientLevel's ILevel base is at
-            // its start
-            function
-                .and_then(|function| unsafe { RawObject::call_pointer(function, client) })
-                .unwrap_or(std::ptr::null_mut())
-        };
-        // SAFETY: forwarded to the caller; the region is the client's current one
-        unsafe { self.draw_block_entities(calls, ghost, skull, ctx, region.as_ptr(), level) };
-    }
-
-    /// Draws the block-entity cells of the last frame's visible full-size slots through the drawer, in the joined
-    /// world's region; returns how many cells were rendered. Nothing outside a world, while the renderer is not
-    /// usable, when `region`, the client's current region, is not the joined one, or when the world epoch core last
-    /// published in `ghost` is not the joined one: the joined world may then be freed already, and the next frame
-    /// leaves it.
-    ///
-    /// # Safety
-    /// `calls` must hold the entries of the running build, `ctx` must be null or the live `BaseActorRenderContext` of
-    /// the running block-entity pass, and `level` null or the live client level. Render thread. The chest pair core
-    /// puts in a key needs no promise from the caller: the drawer writes the large chest fields only into an actor
-    /// whose `isType(Chest)` answers true, and draws any other actor as a single one.
-    #[allow(unsafe_code)]
-    pub unsafe fn draw_block_entities(
-        &mut self,
-        calls: &BlockActorCalls,
-        ghost: &SharedGhost,
-        skull: &SkullSlot,
-        ctx: *mut c_void,
-        region: *mut c_void,
-        level: *mut c_void,
-    ) -> u32 {
-        if self.region.is_null() || region != self.region || !self.usable {
-            return 0;
-        }
-        // a new world's region can sit at the old address; core's epoch moves once per world
-        if ghost.published_world_epoch() != self.world_epoch {
-            return 0;
-        }
-        let Self { drawer, blocks, region, visible, entity_cells, table, .. } = self;
-        let cells = visible.iter().flat_map(|(slot, base)| {
-            let base = *base;
-            entity_cells.get(*slot as usize).into_iter().flatten().map(move |cell| {
-                let [x, y, z] = cell.local;
-                (cell.key, BlockPos { x: base[0] + x, y: base[1] + y, z: base[2] + z }, cell.skull)
-            })
-        });
-        // SAFETY: the caller guarantees the entries, the context and the level; the checks above make the blocks and
-        // the region the joined world's; the drawer checks each chest actor's type before it writes
-        unsafe { drawer.draw(calls, blocks, ctx, *region, level, table.as_deref(), skull, cells) }
-    }
-
-    /// The block actors the drawer holds.
-    pub fn block_actors(&self) -> usize {
-        self.drawer.actors()
-    }
-
-    /// The block of palette id `id` in the joined world, for easy place's creative pick; null outside a world, while
-    /// the renderer is not usable, or for an id the palette does not resolve.
-    pub fn palette_block(&self, id: u16) -> *const c_void {
-        if self.region.is_null() || !self.usable {
-            return std::ptr::null();
-        }
-        self.blocks.block(id)
-    }
-
-    /// One frame: take, free, build, cull and sort, draw, report, in the order the C++ renderer did them. `world` is
-    /// None outside a world or with no local player; `camera` is the frame's camera position.
-    #[allow(unsafe_code)]
-    pub fn run_frame(
-        &mut self,
-        world: Option<&GhostWorld>,
-        screen: &ScreenContext,
-        ghost: &SharedGhost,
-        camera: [f32; 3],
-    ) {
-        let Some(world) = world.filter(|world| !world.region.is_null()) else {
-            if !self.region.is_null() {
-                self.leave();
-            }
-            return;
-        };
-        let Some(tessellator) = screen.tessellator() else { return };
-        // SAFETY: the ScreenContext's own tessellator, live for the frame
-        let Some(mut tessellator) = (unsafe { Tessellator::from_raw(tessellator, &self.calls) }) else { return };
+        let Some(canvas) = event.canvas() else { return };
+        let mesher = event.mesher();
         let Some(take) = ghost.take() else { return };
-        // core's epoch is the one trigger of a rejoin: it moves once per world, also when the new region sits at the
-        // old address, and core has already started the new generation then. While core is between two worlds the
-        // renderer holds nothing, so a new region seen early does not join. A region that changes under an unchanged
-        // epoch is the safety net: the join then asks core for a new generation
-        let epoch_moved = take.world_epoch() != self.world_epoch;
-        self.world_epoch = take.world_epoch();
+        // core's epoch moves once per world; the loader's epoch and a dimension change also make the renderer join
+        // again, and the join then asks core for a new generation
+        let epoch_moved = take.world_epoch() != self.core_epoch;
+        self.core_epoch = take.world_epoch();
+        let rejoin = std::mem::take(&mut self.rejoin);
         if !take.in_world() {
-            if !self.region.is_null() {
-                self.leave();
+            if self.joined() {
+                self.leave(Some(&canvas), entities);
             }
-        } else if epoch_moved || world.region != self.region {
-            if !self.region.is_null() {
-                self.leave();
+        } else if epoch_moved || epoch != self.epoch || rejoin {
+            if self.joined() {
+                self.leave(Some(&canvas), entities);
             }
-            self.join(world, &mut tessellator, !epoch_moved);
+            self.join(epoch, blocks, !epoch_moved);
+        } else if self.joined() && !self.usable {
+            self.retry_join(blocks);
         }
-        self.apply(&take, &mut tessellator);
-        let draw_us = self.draw(&take, screen, world, camera);
+        self.apply(&take, &canvas, mesher.as_ref(), blocks, entities);
+        let draw_us = self.draw(&take, &canvas);
         drop(take);
         let unknown = self.blocks.take_unknown();
         let default_state = self.blocks.take_default_state();
@@ -290,44 +172,186 @@ impl GhostRenderer {
         }
     }
 
-    /// Drops every mesh and lookup, as a world exit does; the next frame in a world joins again. Render thread.
-    pub fn reset(&mut self) {
-        self.leave();
-        self.world_epoch = 0;
+    /// One `BlockEntityPass`: draws the block-entity cells of the last frame's visible full-size slots, for the
+    /// player's camera only and only in the world they were built in. Returns how many cells were drawn.
+    pub fn block_entity_pass(&mut self, event: &BlockEntityPass, epoch: u64, entities: &BlockEntities) -> u32 {
+        // a dimension change is applied by the next `WorldRendered`, which comes after this pass of the same frame
+        if event.camera() != BlockEntityCamera::Player
+            || self.visible.is_empty()
+            || !self.usable
+            || self.rejoin
+            || epoch != self.epoch
+        {
+            return 0;
+        }
+        self.pool.begin_frame();
+        let Self { pool, blocks, visible, entity_cells, table, .. } = self;
+        let mut drawn = 0;
+        let mut stale = false;
+        for (slot, base) in visible.iter() {
+            let Some(cells) = entity_cells.get(*slot as usize) else { continue };
+            for cell in cells {
+                let Some(block) = blocks.block(cell.key.palette) else { continue };
+                let pos =
+                    BlockPos { x: base[0] + cell.local[0], y: base[1] + cell.local[1], z: base[2] + cell.local[2] };
+                let key = cell.key;
+                let nbt = if key.entry == GhostBlockEntity::NONE {
+                    None
+                } else {
+                    table.as_deref().and_then(|table| table.entry(key.entry))
+                };
+                let made = pool.get_or_make(key, || Self::create(entities, block, nbt, key), |old| entities.free(old));
+                let Some(ghost) = made else { continue };
+                match event.draw_block_entity(ghost, pos) {
+                    Ok(()) => drawn += 1,
+                    Err(ApiError::Stale) => stale = true,
+                    Err(_) => {}
+                }
+            }
+        }
+        if stale {
+            // the loader dropped the ghosts (a device reset or surface loss): they are made again, and core builds
+            // the slots again with the meshes
+            curia::info!("block entity ghosts stale, made again", {});
+            self.pool.clear(|ghost| entities.free(ghost));
+            self.world_reset = true;
+        }
+        drawn
     }
 
-    #[allow(unsafe_code)]
-    fn join(&mut self, world: &GhostWorld, tessellator: &mut Tessellator, ask_reset: bool) {
-        self.region = world.region;
-        // the meshes and block lookups are gone; unless core started a new generation for this join already, it
-        // starts one with the palette and a clear
+    /// The world was left: the loader has freed every mesh, group and ghost, so the ids are forgotten without a call.
+    /// Gives how many meshes the renderer held. Game thread.
+    pub fn world_left(&mut self, entities: &BlockEntities) -> usize {
+        let held = self.meshes();
+        if self.joined() {
+            self.leave(None, entities);
+        }
+        held
+    }
+
+    /// The player's dimension changes: the next frame joins again.
+    pub fn dimension_changing(&mut self) {
+        self.rejoin = true;
+    }
+
+    /// The meshes the slot table holds.
+    pub fn meshes(&self) -> usize {
+        self.slots.iter().filter(|slot| slot.is_some()).count()
+    }
+
+    /// The ghosts the pool holds.
+    pub fn block_entities(&self) -> usize {
+        self.pool.len()
+    }
+
+    /// The block of palette id `id` in the joined world, for easy place's creative pick; None outside a world and for
+    /// an id the palette does not resolve.
+    pub fn palette_block(&self, id: u16) -> Option<BlockHandle> {
+        if !self.usable {
+            return None;
+        }
+        self.blocks.block(id)
+    }
+
+    /// Drops every mesh and handle, as a world exit does; the next frame in a world joins again. The loader frees the
+    /// meshes and ghosts of a disabled mod itself.
+    pub fn reset(&mut self, entities: &BlockEntities) {
+        self.leave(None, entities);
+        self.core_epoch = 0;
+    }
+
+    fn joined(&self) -> bool {
+        self.epoch != 0
+    }
+
+    fn create(
+        entities: &BlockEntities,
+        block: BlockHandle,
+        nbt: Option<&[u8]>,
+        key: BlockActorKey,
+    ) -> Result<BlockEntityGhost, bool> {
+        let chest_pair = key.chest.map(|pair| {
+            let [x, y, z] = pair.offset();
+            BlockPos { x, y, z }
+        });
+        entities.create(block, nbt, GhostEntityOptions { chest_pair, skull: key.skull }).map_err(|error| {
+            // the game made no actor, or the block cannot hold the options: the same key fails again; any other
+            // refusal (the live cap before the frees are released, no world yet) is tried again later
+            let for_good = matches!(
+                error,
+                ApiError::Loader(status) if status == AmmlStatus::FAILED || status == AmmlStatus::INVALID_ARGUMENT
+            );
+            curia::info!("block entity ghost not made", { error: format!("{error:?}"), for_good: for_good });
+            for_good
+        })
+    }
+
+    fn join(&mut self, epoch: u64, blocks: &Blocks, ask_reset: bool) {
+        self.epoch = epoch;
+        // the meshes and handles are gone; unless core started a new generation for this join already, it starts one
+        // with the palette and a clear
         self.world_reset = self.world_reset || ask_reset;
-        let blocks_ok = self.blocks.join();
-        // SAFETY: the frame's live client region and game tessellator
-        self.usable =
-            blocks_ok && unsafe { self.tessellator.join(world.region, &self.blocks, tessellator, world.feet) };
-        curia::info!("ghost renderer joined the world", { usable: self.usable, blend_material: !world.blend.is_null() });
+        self.usable = self.blocks.join(blocks);
+        self.retry_frames = 0;
+        self.build_error_logged = false;
+        self.draw_error_logged = false;
+        curia::info!("ghost renderer joined the world", { usable: self.usable, epoch: epoch });
     }
 
-    // a Block pointer and the tessellator's region belong to the world that was left, so both go with the meshes
-    fn leave(&mut self) {
-        self.slots.iter_mut().for_each(|slot| *slot = None);
+    // a joined world whose air was not found is tried again every `RETRY_FRAMES` frames; once it is usable core starts
+    // a new generation, so the palette comes again and is resolved
+    fn retry_join(&mut self, blocks: &Blocks) {
+        self.retry_frames += 1;
+        if self.retry_frames < Self::RETRY_FRAMES {
+            return;
+        }
+        self.retry_frames = 0;
+        self.usable = self.blocks.join(blocks);
+        if self.usable {
+            self.world_reset = true;
+            curia::info!("ghost renderer usable after a retry", { epoch: self.epoch });
+        }
+    }
+
+    // a mesh id and a block handle belong to the world that was left; with a canvas the meshes are freed, without one
+    // the loader has freed them already
+    fn leave(&mut self, canvas: Option<&WorldCanvas<'_>>, entities: &BlockEntities) {
+        for slot in self.slots.iter_mut() {
+            if let (Some(mesh), Some(canvas)) = (slot.take(), canvas) {
+                let _ = canvas.free(mesh);
+            }
+        }
         self.entity_cells.iter_mut().for_each(Vec::clear);
         self.visible.clear();
-        self.drawer.clear();
+        self.pool.clear(|ghost| entities.free(ghost));
         self.table = None;
         self.group.clear();
-        self.tessellator.leave();
         self.blocks.leave();
-        self.region = std::ptr::null_mut();
+        self.epoch = 0;
         self.usable = false;
     }
 
+    fn free_slot(&mut self, slot: usize, canvas: &WorldCanvas<'_>) {
+        if let Some(mesh) = self.slots.get_mut(slot).and_then(Option::take) {
+            let _ = canvas.free(mesh);
+        }
+    }
+
     // in core's order: free every slot, then the frees, then the palette, then the jobs
-    fn apply(&mut self, take: &GhostTake, tessellator: &mut Tessellator) {
+    fn apply(
+        &mut self,
+        take: &GhostTake,
+        canvas: &WorldCanvas<'_>,
+        mesher: Option<&BlockMesher<'_>>,
+        blocks: &Blocks,
+        entities: &BlockEntities,
+    ) {
         let capacity = take.slot_capacity() as usize;
         if capacity != self.slots.len() {
             // sized once to core's slot capacity, which changes only with the config
+            for slot in 0..self.slots.len() {
+                self.free_slot(slot, canvas);
+            }
             self.slots.clear();
             self.slots.resize_with(capacity, || None);
             self.built.clear();
@@ -346,35 +370,38 @@ impl GhostRenderer {
         }
         self.generation = take.generation();
         if take.clear_all() {
-            self.slots.iter_mut().for_each(|slot| *slot = None);
+            for slot in 0..self.slots.len() {
+                self.free_slot(slot, canvas);
+            }
             self.entity_cells.iter_mut().for_each(Vec::clear);
         }
         for free in take.frees() {
-            if let Some(slot) = self.slots.get_mut(*free as usize) {
-                *slot = None;
+            let slot = *free as usize;
+            if slot < self.slots.len() {
+                self.free_slot(slot, canvas);
                 self.group.free(*free);
             }
-            if let Some(cells) = self.entity_cells.get_mut(*free as usize) {
+            if let Some(cells) = self.entity_cells.get_mut(slot) {
                 cells.clear();
             }
         }
         self.palette_resolved = false;
         if let Some(palette) = take.palette() {
             self.palette_resolved = true;
-            // the actors' keys and every slot's block-entity cells name palette ids and NBT entries of the table
-            // that is gone; the jobs of this take fill the cells again
+            // the ghosts' keys and every slot's block-entity cells name palette ids and NBT entries of the table that
+            // is gone; the jobs of this take fill the cells again
             self.table = take.shared_block_entities();
-            self.drawer.clear();
+            self.pool.clear(|ghost| entities.free(ghost));
             self.entity_cells.iter_mut().for_each(Vec::clear);
             self.visible.clear();
             let start = Instant::now();
-            self.blocks.resolve(palette, take.rotation());
+            self.blocks.resolve(blocks, palette, take.rotation());
             curia::info!("ghost palette resolved", { us: Self::micros(start) });
         }
-        self.build(take, tessellator);
+        self.build(take, canvas, mesher);
     }
 
-    fn build(&mut self, take: &GhostTake, tessellator: &mut Tessellator) {
+    fn build(&mut self, take: &GhostTake, canvas: &WorldCanvas<'_>, mesher: Option<&BlockMesher<'_>>) {
         self.built.clear();
         self.build_us = 0;
         self.cells_built = 0;
@@ -389,137 +416,219 @@ impl GhostRenderer {
                 continue;
             }
             let start = Instant::now();
-            let idle = if job.mode == GhostJobMode::Replace {
-                self.build_replace(job, *generation, tessellator, alpha)
+            if job.mode == GhostJobMode::Replace {
+                self.build_replace(job, *generation, canvas, mesher, alpha);
             } else {
-                self.build_group(job, *generation, tessellator, alpha)
-            };
-            // the game is tessellating: this job and the rest go unanswered, and core hands them out again
-            if !idle {
-                break;
+                self.build_group(job, *generation, canvas, mesher, alpha);
             }
             self.build_us += Self::micros(start);
         }
     }
 
-    // tessellates the job into the slot's mesh; false when the game's tessellator is in use
-    fn build_replace(&mut self, job: &GhostJob, generation: u64, tessellator: &mut Tessellator, alpha: u8) -> bool {
-        let slot = job.slot as usize;
-        let mut built = GhostBuilt::default();
-        if self.usable {
-            built = self.tessellator.build(tessellator, job, &self.blocks, alpha, &mut self.slots[slot]);
+    // the mesher grid of a job: its padded cells, the world position of the padded corner and the palette handles
+    fn grid<'a>(job: &'a GhostJob, palette: &'a [BlockHandle]) -> BlockGrid<'a> {
+        let [x, y, z] = job.origin;
+        BlockGrid {
+            dims: job.dims.map(|side| side + 2),
+            origin: BlockPos { x: x - 1, y: y - 1, z: z - 1 },
+            cells: &job.cells,
+            palette,
         }
-        if built.busy {
-            return false;
-        }
-        // the slot's mesh is no longer a group's
-        self.group.free(job.slot);
-        self.keep_entity_cells(job, self.usable && built.ok);
-        self.sizes[slot] = job.slot_size;
-        self.cells_built += built.cells;
-        self.skipped_cells += built.skipped;
-        let bytes = built.vertices * Self::GPU_BYTES_PER_VERTEX;
-        self.built.push(SlotBuilt { slot: job.slot, serial: job.serial, generation, bytes, ok: built.ok });
-        true
     }
 
-    // an Append adds the job's vertices to the group buffer, a Finish uploads the buffer as the slot's mesh; a job
-    // applied already is answered as built, any other job core sent out of turn is not answered. False when the
-    // game's tessellator is in use
-    fn build_group(&mut self, job: &GhostJob, generation: u64, tessellator: &mut Tessellator, alpha: u8) -> bool {
+    // the cells of the job's part that hold a block, padding excluded
+    fn filled_cells(job: &GhostJob) -> u32 {
+        let [sx, sy, sz] = job.dims.map(|side| side as usize);
+        let (px, pz) = (sx + 2, sz + 2);
+        let mut count = 0;
+        for (index, cell) in job.cells.iter().enumerate() {
+            if *cell == BlockResolver::EMPTY {
+                continue;
+            }
+            let (x, rest) = (index % px, index / px);
+            let (z, y) = (rest % pz, rest / pz);
+            if x != 0 && y != 0 && z != 0 && x <= sx && y <= sy && z <= sz {
+                count += 1;
+            }
+        }
+        count
+    }
+
+    fn options(&self, job: &GhostJob, alpha: u8) -> MesherOptions {
+        MesherOptions { alpha, skip_matching_world: job.skip_matching, water_tint: self.water_tint }
+    }
+
+    fn log_build_error(&mut self, slot: u32, error: ApiError) {
+        if !self.build_error_logged {
+            self.build_error_logged = true;
+            curia::warn!("ghost build refused", { slot: slot, error: format!("{error:?}") });
+        }
+    }
+
+    // builds the job into the slot's mesh, in place of the slot's last mesh
+    fn build_replace(
+        &mut self,
+        job: &GhostJob,
+        generation: u64,
+        canvas: &WorldCanvas<'_>,
+        mesher: Option<&BlockMesher<'_>>,
+        alpha: u8,
+    ) {
+        let slot = job.slot as usize;
+        let built = match mesher.filter(|_| self.usable) {
+            Some(mesher) => mesher.build(&Self::grid(job, self.blocks.handles()), &self.options(job, alpha)),
+            None => Err(ApiError::NotReady),
+        };
+        // a build the world could not make yet keeps the slot's last mesh; core builds it again
+        if built != Err(ApiError::NotReady) {
+            self.free_slot(slot, canvas);
+            // the slot's mesh is no longer a group's
+            self.group.free(job.slot);
+        }
+        let (ok, bytes, skipped) = match built {
+            Ok(built) => {
+                if built.quads > 0 {
+                    self.slots[slot] = Some(built.mesh);
+                }
+                let bytes = u64::from(built.quads) * Self::VERTICES_PER_QUAD * Self::GPU_BYTES_PER_VERTEX;
+                (true, bytes, built.skipped)
+            }
+            Err(error) => {
+                self.log_build_error(job.slot, error);
+                (false, 0, Vec::new())
+            }
+        };
+        self.keep_entity_cells(job, ok, &skipped);
+        self.sizes[slot] = job.slot_size;
+        if ok {
+            let skipped_count = u32::try_from(skipped.len()).unwrap_or(u32::MAX);
+            self.cells_built += Self::filled_cells(job).saturating_sub(skipped_count);
+            self.skipped_cells += skipped_count;
+        }
+        self.built.push(SlotBuilt { slot: job.slot, serial: job.serial, generation, bytes, ok });
+    }
+
+    // an Append adds the job's cells to the open group, a Finish makes the group the slot's mesh; a job applied
+    // already is answered as built, any other job core sent out of turn is not answered
+    fn build_group(
+        &mut self,
+        job: &GhostJob,
+        generation: u64,
+        canvas: &WorldCanvas<'_>,
+        mesher: Option<&BlockMesher<'_>>,
+        alpha: u8,
+    ) {
         let slot = job.slot as usize;
         let answer = |bytes: u64, ok: bool| SlotBuilt { slot: job.slot, serial: job.serial, generation, bytes, ok };
-        let step = self.group.step(job);
-        match step {
-            GroupStep::Ignore => return true,
+        match self.group.step(job) {
+            GroupStep::Ignore => return,
             GroupStep::Repeat => {
-                self.built.push(answer(self.group.vertices() * Self::GPU_BYTES_PER_VERTEX, true));
-                return true;
+                self.built.push(answer(self.group.bytes(), true));
+                return;
             }
             GroupStep::RepeatFinish => {
                 self.built.push(answer(self.group.finished_bytes(job.slot), true));
-                return true;
+                return;
             }
             GroupStep::Apply => {}
         }
-        if tessellator.is_tessellating() {
-            return false;
-        }
+        let Some(mesher) = mesher.filter(|_| self.usable) else {
+            self.group.drop_build();
+            self.built.push(answer(0, false));
+            return;
+        };
         if job.group_index == 0 {
-            self.group.start(job);
+            match mesher.begin_group(job.slot_size) {
+                Ok(group) => self.group.start(job, group),
+                Err(error) => {
+                    self.log_build_error(job.slot, error);
+                    self.built.push(answer(0, false));
+                    return;
+                }
+            }
         }
         if job.mode == GhostJobMode::Append {
-            let mut built = GhostBuilt::default();
-            if self.usable {
-                built = self.tessellator.append(tessellator, job, &self.blocks, alpha, &mut self.group);
+            self.append(job, mesher, alpha, answer);
+            return;
+        }
+        let start = Instant::now();
+        let finished = match self.group.take() {
+            Some(group) => mesher.finish(group),
+            None => Err(ApiError::Stale),
+        };
+        let us = Self::micros(start);
+        match finished {
+            Ok(built) => {
+                self.free_slot(slot, canvas);
+                if built.quads > 0 {
+                    self.slots[slot] = Some(built.mesh);
+                }
+                let quads = u64::from(built.quads);
+                let bytes = quads * Self::VERTICES_PER_QUAD * Self::GPU_BYTES_PER_VERTEX
+                    + quads * Self::INDICES_PER_QUAD * Self::INDEX_BYTES;
+                self.group.finish(job.slot, job.group_serial, bytes);
+                self.sizes[slot] = job.slot_size;
+                // a group mesh draws no block-entity models
+                if let Some(cells) = self.entity_cells.get_mut(slot) {
+                    cells.clear();
+                }
+                self.built.push(answer(bytes, true));
+                curia::info!("ghost group uploaded", { slot: job.slot, quads: built.quads, us: us });
             }
-            if built.busy {
-                return false;
-            }
-            // a failed part fails its group; core starts it again with index 0 or not at all
-            if !built.ok {
+            Err(error) => {
                 self.group.drop_build();
-                let reason = if self.usable { "append refused" } else { "renderer not usable" };
                 curia::info!("ghost group failed", {
                     slot: job.slot,
                     group_serial: job.group_serial,
                     group_index: job.group_index,
-                    reason: reason
+                    reason: format!("finish {error:?}")
                 });
+                self.built.push(answer(0, false));
             }
-            self.cells_built += built.cells;
-            self.skipped_cells += built.skipped;
-            self.built.push(answer(self.group.vertices() * Self::GPU_BYTES_PER_VERTEX, built.ok));
-            return true;
         }
-        let start = Instant::now();
-        let Some(data) = self.group.data_mut() else { return true };
-        let finished = self.tessellator.finish(tessellator, data, &mut self.slots[slot]);
-        if finished.busy {
-            return false;
-        }
-        let us = Self::micros(start);
-        let bytes = if finished.ok {
-            finished.vertices * Self::GPU_BYTES_PER_VERTEX + finished.indices * Self::INDEX_BYTES
-        } else {
-            0
-        };
-        if finished.ok {
-            self.group.finish(job.slot, job.group_serial, bytes);
-            self.sizes[slot] = job.slot_size;
-            // a group mesh draws no block-entity models
-            if let Some(cells) = self.entity_cells.get_mut(slot) {
-                cells.clear();
-            }
-        } else {
-            self.group.drop_build();
-            curia::info!("ghost group failed", {
-                slot: job.slot,
-                group_serial: job.group_serial,
-                group_index: job.group_index,
-                reason: "finish refused"
-            });
-        }
-        self.built.push(answer(bytes, finished.ok));
-        curia::info!("ghost group uploaded", {
-            slot: job.slot,
-            vertices: finished.vertices,
-            indices: finished.indices,
-            ok: finished.ok,
-            us: us
-        });
-        true
     }
 
-    // the job's block-entity cells in the slot's list, without the cells the skip rule left out at the build and the
-    // cells outside the job's part; the list is emptied when `keep` is false
-    fn keep_entity_cells(&mut self, job: &GhostJob, keep: bool) {
+    // adds the job's cells to the open group, each cell one cell above its place in the slot box; a failed part fails
+    // its group, and core starts it again with index 0 or not at all
+    fn append(&mut self, job: &GhostJob, mesher: &BlockMesher<'_>, alpha: u8, answer: impl Fn(u64, bool) -> SlotBuilt) {
+        let [x, y, z] = job.group_offset;
+        let offset = BlockPos { x, y, z };
+        let options = self.options(job, alpha);
+        let grid = Self::grid(job, self.blocks.handles());
+        let appended = match self.group.group_mut() {
+            Some(group) => mesher.append(group, &grid, offset, &options),
+            None => Err(ApiError::Stale),
+        };
+        match appended {
+            Ok(()) => {
+                let cells = Self::filled_cells(job);
+                self.cells_built += cells;
+                let bytes =
+                    u64::from(cells) * Self::QUADS_PER_CELL * Self::VERTICES_PER_QUAD * Self::GPU_BYTES_PER_VERTEX;
+                self.group.appended(bytes);
+                self.built.push(answer(self.group.bytes(), true));
+            }
+            Err(error) => {
+                self.group.drop_build();
+                curia::info!("ghost group failed", {
+                    slot: job.slot,
+                    group_serial: job.group_serial,
+                    group_index: job.group_index,
+                    reason: format!("append {error:?}")
+                });
+                self.built.push(answer(self.group.bytes(), false));
+            }
+        }
+    }
+
+    // the job's block-entity cells in the slot's list, without the cells the mesher left out as matching the world
+    // and the cells outside the job's part; the list is emptied when `keep` is false
+    fn keep_entity_cells(&mut self, job: &GhostJob, keep: bool, skipped: &[u32]) {
         let Some(cells) = self.entity_cells.get_mut(job.slot as usize) else { return };
         cells.clear();
         if !keep {
             return;
         }
-        let skipped = self.tessellator.skipped();
         let [sx, sy, sz] = job.dims.map(|side| side as usize);
         let (px, pz) = (sx + 2, sz + 2);
         for entity in &job.block_entities {
@@ -528,7 +637,7 @@ impl GhostRenderer {
             }
             let index = entity.cell as usize;
             let Some(palette) = job.cells.get(index).copied() else { continue };
-            if palette == u16::MAX {
+            if palette == BlockResolver::EMPTY {
                 continue;
             }
             // the padded grid runs X fastest, then Z, then Y, one cell of border on each side
@@ -537,44 +646,53 @@ impl GhostRenderer {
             if x == 0 || y == 0 || z == 0 || x > sx || y > sy || z > sz {
                 continue;
             }
-            let key = BlockActorKey::new(palette, entity.entry, entity.chest);
-            cells.push(BlockActorCell::new(key, [x as i32 - 1, y as i32 - 1, z as i32 - 1], entity.skull));
+            let skull = entity.skull.and_then(SkullPoseMap::pose);
+            let key = BlockActorKey::new(palette, entity.entry, entity.chest, skull);
+            cells.push(BlockActorCell::new(key, [x as i32 - 1, y as i32 - 1, z as i32 - 1]));
         }
     }
 
-    #[allow(unsafe_code)]
-    fn draw(&mut self, take: &GhostTake, screen: &ScreenContext, world: &GhostWorld, camera: [f32; 3]) -> u64 {
+    fn draw(&mut self, take: &GhostTake, canvas: &WorldCanvas<'_>) -> u64 {
         self.culled = 0;
         self.meshes_drawn = 0;
         self.visible.clear();
-        if world.blend.is_null() || world.atlas.is_null() {
+        if !self.usable {
             return 0;
         }
         let start = Instant::now();
-        let count = self.cull(take, screen, camera);
+        let camera = canvas.camera_position().map_or([0.0; 3], |camera| [camera.x, camera.y, camera.z]);
+        let count = self.cull(take, canvas.clip_matrix().as_ref(), camera);
         self.keep_visible(take, count);
         let mut drawn = 0;
-        if count > 0 {
-            // SAFETY: the level renderer's live atlas texture holds live uses; the copy takes its own for the frame
-            let mut texture = unsafe { (*world.atlas).clone_ref() };
-            let variant = TextureVariant::new(TexturePtrLayout::VARIANT_INDEX, texture);
-            for index in 0..count {
-                let draw = take.draws()[self.order[index] as usize];
-                let Some(mesh) = self.slots[draw.slot as usize].as_ref() else { continue };
-                let offset = std::array::from_fn(|axis| {
-                    draw.origin[axis] as f32 - camera[axis] + draw.offset[axis] as f32 * draw.scale
-                });
-                screen.set_ghost_constants();
-                let pushed = screen.push_world_matrix(offset, draw.scale);
-                if pushed.is_some() {
-                    // SAFETY: the item-in-hand renderer's material and a texture copy that holds its own uses
-                    unsafe { mesh.render(screen, world.blend, &variant) };
-                    drawn += 1;
+        let mut stale = false;
+        for index in 0..count {
+            let draw = take.draws()[self.order[index] as usize];
+            let Some(mesh) = self.slots.get(draw.slot as usize).copied().flatten() else { continue };
+            let back = |axis: usize| (draw.offset[axis] - 1) as f32 * draw.scale;
+            let transform = Transform {
+                origin: BlockPos { x: draw.origin[0], y: draw.origin[1], z: draw.origin[2] },
+                offset: Vec3 { x: back(0), y: back(1), z: back(2) },
+                scale: draw.scale,
+                yaw_degrees: 0.0,
+            };
+            match canvas.draw(mesh, transform) {
+                Ok(()) => drawn += 1,
+                Err(ApiError::Stale) => stale = true,
+                Err(ApiError::NotReady) => {}
+                Err(error) => {
+                    if !self.draw_error_logged {
+                        self.draw_error_logged = true;
+                        curia::warn!("ghost draw refused", { slot: draw.slot, error: format!("{error:?}") });
+                    }
                 }
-                drop(pushed);
             }
-            // SAFETY: the copy holds the two uses `clone_ref` took; the variant was a byte copy and is not released
-            unsafe { texture.release() };
+        }
+        if stale {
+            // the loader dropped the meshes (a device reset or a graphics mode switch): core builds them again
+            curia::info!("ghost meshes stale, built again", {});
+            self.slots.iter_mut().for_each(|slot| *slot = None);
+            self.group.clear();
+            self.world_reset = true;
         }
         self.meshes_drawn = drawn;
         Self::micros(start)
@@ -598,10 +716,9 @@ impl GhostRenderer {
 
     // fills `order` with the indices of the listed draws that have a mesh or block-entity cells and are in view,
     // farthest first; a slot's box is outside when all eight corners lie beyond the same clip plane of projection x
-    // view, in camera-relative space. With no camera matrices nothing is culled. Returns how many are in `order` and counts the rest in
-    // `culled`
-    fn cull(&mut self, take: &GhostTake, screen: &ScreenContext, camera: [f32; 3]) -> usize {
-        let clip = screen.clip_matrix();
+    // view, in camera-relative space. With no clip matrix nothing is culled. Returns how many are in `order` and counts
+    // the rest in `culled`
+    fn cull(&mut self, take: &GhostTake, clip: Option<&[[f32; 4]; 4]>, camera: [f32; 3]) -> usize {
         let draws = take.draws();
         let mut count = 0;
         for (index, draw) in draws.iter().enumerate() {
@@ -619,7 +736,7 @@ impl GhostRenderer {
                 draw.origin[axis] as f32 - camera[axis] + draw.offset[axis] as f32 * draw.scale
             });
             let hi: [f32; 3] = std::array::from_fn(|axis| lo[axis] + size[axis] as f32 * draw.scale);
-            if let Some(clip) = clip.as_ref()
+            if let Some(clip) = clip
                 && Self::outside(clip, lo, hi)
             {
                 self.culled += 1;
@@ -657,61 +774,6 @@ impl GhostRenderer {
             }
         }
         outside.contains(&Self::CORNERS)
-    }
-
-    // the world of this frame, from the client the tick saw last; None out of a world or with no player
-    #[allow(unsafe_code)]
-    unsafe fn world_of(
-        &self,
-        entries: &GameEntries,
-        client: Option<NonNull<c_void>>,
-        renderer: *mut c_void,
-    ) -> Option<GhostWorld> {
-        // SAFETY: the client the update detour saw, live while the game runs
-        let client = unsafe { ClientInstance::from_raw(client?.as_ptr(), entries) }?;
-        let region = client.region()?;
-        let pose = client.local_player()?.pose()?;
-        let [x, y, z] = PlayerSpot::feet_of(pose.pos);
-        let atlas = if renderer.is_null() {
-            std::ptr::null()
-        } else {
-            renderer
-                .cast::<u8>()
-                .wrapping_add(self.calls.atlas_texture as usize)
-                .cast::<TexturePtrLayout>()
-                .cast_const()
-        };
-        Some(GhostWorld {
-            region: region.as_ptr(),
-            feet: amml_game::BlockPos { x, y, z },
-            blend: self.blend_material(&client).unwrap_or(std::ptr::null()),
-            atlas,
-        })
-    }
-
-    // the blend-block material of the client's item-in-hand renderer, as a `mce::MaterialPtr const*`
-    #[allow(unsafe_code)]
-    fn blend_material(&self, client: &ClientInstance) -> Option<*const c_void> {
-        // SAFETY: a live ClientInstance; the entry is the slot of `getItemInHandRenderer`
-        let function = unsafe { RawObject::slot(client.as_ptr(), self.calls.item_in_hand_renderer_slot) }?;
-        // SAFETY: the slot holds `ItemInHandRenderer* ClientInstance::getItemInHandRenderer()`
-        let renderer = unsafe { RawObject::call_pointer(function, client.as_ptr()) }?;
-        Some(renderer.cast::<u8>().wrapping_add(self.calls.blend_material as usize).cast::<c_void>().cast_const())
-    }
-
-    // the camera position of the frame's first view
-    #[allow(unsafe_code)]
-    unsafe fn camera_of(&self, entries: &GameEntries, frame: *const c_void) -> Option<[f32; 3]> {
-        if frame.is_null() {
-            return None;
-        }
-        // SAFETY: the live FrameRenderObject of the call; `mViews` is a std::vector<ViewRenderObject>
-        let [first, last] = unsafe { RawObject::read::<[usize; 2]>(frame, self.calls.frame_views) }?;
-        if first == 0 || first == last {
-            return None;
-        }
-        // SAFETY: the first ViewRenderObject of the frame
-        unsafe { RenderCamera::new(entries).view_position(first as *const c_void) }
     }
 
     fn micros(start: Instant) -> u64 {

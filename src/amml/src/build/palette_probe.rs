@@ -1,11 +1,11 @@
 use stratum_core::structs::build::{BuildProbeRequest, BuildProbeResult, PaletteOutcome};
 
 use crate::traits::PaletteGame;
-use crate::types::NbtLookup;
+use crate::types::PaletteLookup;
 
 /// Answers the core's palette request from the game: each entry is looked up as the ghost looks it up (exact, then the
 /// name with the default states, then unknown), and the game's own turn of the block is compared with the block of
-/// the entry core turned.
+/// the entry core turned. Blocks are compared by handle: an equal handle is the same game block.
 pub struct PaletteProbe;
 
 impl PaletteProbe {
@@ -28,13 +28,13 @@ impl PaletteProbe {
             return (PaletteOutcome::Unknown, false);
         }
         let found = game.lookup(unturned);
-        let outcome = match found {
-            NbtLookup::Exact(_) => PaletteOutcome::Exact,
-            NbtLookup::Default(_) => PaletteOutcome::NameOnly,
-            NbtLookup::Unknown => return (PaletteOutcome::Unknown, false),
+        let (outcome, block) = match found {
+            PaletteLookup::Exact(block) => (PaletteOutcome::Exact, block),
+            PaletteLookup::Default(block) => (PaletteOutcome::NameOnly, block),
+            PaletteLookup::Unknown => return (PaletteOutcome::Unknown, false),
         };
-        let game_turn = game.turn(found.block(), quarters);
+        let game_turn = game.turn(block, quarters);
         let core_turn = game.lookup(turned).block();
-        (outcome, game_turn != core_turn)
+        (outcome, game_turn.is_none() || game_turn != core_turn)
     }
 }

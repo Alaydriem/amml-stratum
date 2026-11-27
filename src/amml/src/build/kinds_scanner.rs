@@ -1,27 +1,25 @@
 use std::collections::HashSet;
 
+use amml_api::{BlockPos, BlockSource, KindsInBox};
 use stratum_core::structs::build::{BuildKindsRequest, BuildKindsResult};
 
 use crate::traits::BlockGrid;
 
-/// Reads the block kinds of a box of the world for the core's clear, a fixed number of cells a tick. A box with a
-/// chunk that is not loaded, a block that reads null or a kind whose name cannot be read answers `NotLoaded`; a box
-/// with more kinds than `KIND_BOUND` answers `TooMany`.
+/// Reads the block kinds of a box of the world for the core's clear, one slab of at most `cells_per_tick` cells a
+/// tick (never more than the loader's `BlockSource::KINDS_CELL_CAP`). A slab with a chunk that is not loaded, or one
+/// the loader refuses, answers `NotLoaded`; a box with more kinds than `KIND_BOUND` answers `TooMany`.
 ///
 /// Bound: at most `KIND_BOUND` kinds and names are held; they are dropped when the answer is given.
 pub struct KindsScanner {
-    cells_per_tick: usize,
+    cells_per_tick: u32,
     active: bool,
     min: [i32; 3],
     max: [i32; 3],
+    // the minimum corner of the next slab
     cursor: [i32; 3],
-    // the chunk of the last cell read, so a chunk is asked for once per run of cells in it
-    chunk: Option<(i32, i32)>,
-    // the kind of the last cell read, so a run of the same kind is looked up once
-    last_kind: Option<usize>,
-    // whether the unreadable name of this scan was logged
-    name_logged: bool,
-    seen: HashSet<usize>,
+    // the slab size on x, y and z, set at the start of a scan
+    slab: [i32; 3],
+    seen: HashSet<String>,
     names: Vec<String>,
 }
 
@@ -29,22 +27,17 @@ impl KindsScanner {
     /// The most kinds one scan holds. The core keeps its own, smaller, limit from its config.
     pub const KIND_BOUND: usize = 16_384;
 
-    /// The cells one tick reads when the config has no other rate.
-    pub const CELLS_PER_TICK: usize = 65_536;
+    /// The cells one tick reads when the config has no other rate: one full loader box.
+    pub const CELLS_PER_TICK: u32 = BlockSource::KINDS_CELL_CAP;
 
-    // an `i32` shifted by 4 floors to the chunk coordinate, for negative cells too
-    const CHUNK_SHIFT: u32 = 4;
-
-    pub fn new(cells_per_tick: usize) -> Self {
+    pub fn new(cells_per_tick: u32) -> Self {
         Self {
-            cells_per_tick: cells_per_tick.max(1),
+            cells_per_tick: cells_per_tick.clamp(1, BlockSource::KINDS_CELL_CAP),
             active: false,
             min: [0; 3],
             max: [0; 3],
             cursor: [0; 3],
-            chunk: None,
-            last_kind: None,
-            name_logged: false,
+            slab: [1; 3],
             seen: HashSet::new(),
             names: Vec::new(),
         }
@@ -57,6 +50,7 @@ impl KindsScanner {
         self.min = request.min;
         self.max = request.max;
         self.cursor = request.min;
+        self.slab = self.slab_size();
     }
 
     pub fn is_scanning(&self) -> bool {
@@ -68,7 +62,7 @@ impl KindsScanner {
         self.names.len()
     }
 
-    /// Reads up to a tick's cells; the answer when the box is done or cannot be read, None while cells are left.
+    /// Reads one slab; the answer when the box is done or cannot be read, None while slabs are left.
     pub fn step(&mut self, grid: &dyn BlockGrid) -> Option<BuildKindsResult> {
         if !self.active {
             return None;
@@ -76,58 +70,52 @@ impl KindsScanner {
         if self.min.iter().zip(&self.max).any(|(low, high)| low > high) {
             return Some(self.finish(BuildKindsResult::Kinds(Vec::new())));
         }
-        // a chunk can unload between ticks, so each tick asks again
-        self.chunk = None;
-        for _ in 0..self.cells_per_tick {
-            if let Some(refusal) = self.read_cell(grid) {
-                return Some(self.finish(refusal));
+        let low = self.cursor;
+        let high: [i32; 3] = std::array::from_fn(|axis| (low[axis] + self.slab[axis] - 1).min(self.max[axis]));
+        let read = grid.kinds_in(
+            BlockPos { x: low[0], y: low[1], z: low[2] },
+            BlockPos { x: high[0], y: high[1], z: high[2] },
+            Self::KIND_BOUND as u32,
+        );
+        match read {
+            Ok(KindsInBox::Kinds(kinds)) => {
+                for kind in kinds {
+                    if self.seen.contains(&kind) {
+                        continue;
+                    }
+                    if self.names.len() >= Self::KIND_BOUND {
+                        return Some(self.finish(BuildKindsResult::TooMany));
+                    }
+                    self.seen.insert(kind.clone());
+                    self.names.push(kind);
+                }
             }
-            if !self.advance() {
-                let kinds = std::mem::take(&mut self.names);
-                return Some(self.finish(BuildKindsResult::Kinds(kinds)));
-            }
+            Ok(KindsInBox::TooMany) => return Some(self.finish(BuildKindsResult::TooMany)),
+            Ok(KindsInBox::NotLoaded) | Err(_) => return Some(self.finish(BuildKindsResult::NotLoaded)),
+        }
+        if !self.advance() {
+            let kinds = std::mem::take(&mut self.names);
+            return Some(self.finish(BuildKindsResult::Kinds(kinds)));
         }
         None
     }
 
-    // reads the cell under the cursor; a refusal ends the scan
-    fn read_cell(&mut self, grid: &dyn BlockGrid) -> Option<BuildKindsResult> {
-        let [x, y, z] = self.cursor;
-        let chunk = (x >> Self::CHUNK_SHIFT, z >> Self::CHUNK_SHIFT);
-        if self.chunk != Some(chunk) {
-            if !grid.chunk_loaded(chunk.0, chunk.1) {
-                return Some(BuildKindsResult::NotLoaded);
-            }
-            self.chunk = Some(chunk);
-        }
-        let Some(kind) = grid.kind_at([x, y, z]) else {
-            return Some(BuildKindsResult::NotLoaded);
-        };
-        if self.last_kind == Some(kind) || self.seen.contains(&kind) {
-            self.last_kind = Some(kind);
-            return None;
-        }
-        if self.names.len() >= Self::KIND_BOUND {
-            return Some(BuildKindsResult::TooMany);
-        }
-        let Some(name) = grid.kind_name(kind) else {
-            if !self.name_logged {
-                self.name_logged = true;
-                curia::warn!("a block type name could not be read, the scan stops", { kind: kind });
-            }
-            return Some(BuildKindsResult::NotLoaded);
-        };
-        self.seen.insert(kind);
-        self.names.push(name);
-        self.last_kind = Some(kind);
-        None
+    // the largest slab of at most `cells_per_tick` cells: full columns first, then rows of z, then planes of x
+    fn slab_size(&self) -> [i32; 3] {
+        let side = |axis: usize| (i64::from(self.max[axis]) - i64::from(self.min[axis]) + 1).max(1);
+        let cap = i64::from(self.cells_per_tick);
+        let y = side(1).min(cap);
+        let z = side(2).min((cap / y).max(1));
+        let x = side(0).min((cap / (y * z)).max(1));
+        [x, y, z].map(|size| i32::try_from(size).unwrap_or(i32::MAX))
     }
 
-    // moves the cursor to the next cell, up the column first, then along z, then along x; false at the end of the box
+    // moves the cursor to the next slab, up the column first, then along z, then along x; false at the end of the box
     fn advance(&mut self) -> bool {
         for axis in [1usize, 2, 0] {
-            if self.cursor[axis] < self.max[axis] {
-                self.cursor[axis] += 1;
+            let next = self.cursor[axis].saturating_add(self.slab[axis]);
+            if next <= self.max[axis] {
+                self.cursor[axis] = next;
                 return true;
             }
             self.cursor[axis] = self.min[axis];
@@ -142,9 +130,6 @@ impl KindsScanner {
 
     fn clear(&mut self) {
         self.active = false;
-        self.chunk = None;
-        self.last_kind = None;
-        self.name_logged = false;
         self.seen.clear();
         self.names.clear();
     }

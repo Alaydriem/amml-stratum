@@ -4,8 +4,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use amm_client::link::ApiTable;
-use amm_core::errors::LinkError;
+use amm_client::link::ManagerLink;
+use amml_api::Input;
 use stratum_core::config::PreviewConfig;
 use stratum_core::services::StratumController;
 use stratum_core::services::preview::{PreviewService, SourceLocator};
@@ -28,22 +28,25 @@ impl StratumHandle {
     // The wait for the preview thread at shutdown.
     pub const PREVIEW_SHUTDOWN_BUDGET: Duration = Duration::from_millis(500);
 
-    // Registers with the manager and starts the controller from the manager's config; an unreadable config
-    // gives the defaults. `config_dir` is the mod's config folder and `data_dir` the folder for the library, both
-    // absolute paths.
-    pub fn connect(table: ApiTable, config_dir: &Path, data_dir: &Path) -> Result<Self, LinkError> {
-        // the preview starts before the session, whose frame handler holds it; the manager gives the config only
-        // after the registration, so the preview starts with the default bounds and takes the config below
+    // The state the frame handler shares, with the preview for `data_dir`, the folder for the library (an absolute
+    // path). The preview starts before the session, whose frame handler holds it; the manager gives the config only
+    // after the registration, so the preview starts with the default bounds and takes the config in `new`.
+    pub fn shared_for(data_dir: &Path) -> Arc<SharedUi> {
         let preview = PreviewService::new_shared(SourceLocator::locate(data_dir), &PreviewConfig::default());
-        let shared = SharedUi::new_shared(Some(preview));
-        let session = ManagerSession::connect(table, config_dir, Arc::clone(&shared))?;
+        SharedUi::new_shared(Some(preview))
+    }
+
+    // Starts the controller over a connected link, from the manager's config; an unreadable config gives the
+    // defaults. `shared` is the state the link's frame handler was made with.
+    pub fn new(link: ManagerLink, shared: Arc<SharedUi>, data_dir: &Path, input: Input) -> Self {
+        let session = ManagerSession::new(link, Arc::clone(&shared), input);
         let config = session.config().unwrap_or_default();
         shared.meter().set_enabled(config.debug.telemetry);
         shared.reconfigure_preview(&config.preview);
         let controller = StratumController::new(data_dir.to_path_buf(), config);
         let ghost = SharedGhost::new_shared();
         let state = Mutex::new(HandleState::new(controller, session, Arc::clone(&shared), Arc::clone(&ghost)));
-        Ok(Self { state, shared, ghost, is_poison_reported: AtomicBool::new(false) })
+        Self { state, shared, ghost, is_poison_reported: AtomicBool::new(false) }
     }
 
     // None when a panic poisoned the lock. The first such call logs it and gives back the library's leases and
@@ -93,7 +96,7 @@ impl StratumHandle {
 }
 
 // the use calls reach the core through its lock; None when a panic poisoned it
-impl UseCore for &StratumHandle {
+impl UseCore for StratumHandle {
     fn aim(&mut self, probe: &UseProbe) -> Option<Option<[i32; 3]>> {
         self.with_state(|state| state.use_aim(probe))
     }

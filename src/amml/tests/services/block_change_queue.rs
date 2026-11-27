@@ -2,7 +2,7 @@ use alaydriem_stratum::services::BlockChangeQueue;
 use alaydriem_stratum::types::QueuedChange;
 
 fn change(x: i32, name: Option<&str>) -> QueuedChange {
-    QueuedChange { position: [x, 64, 0], seen: name.map(|name| (name.as_bytes().to_vec(), 1.5)) }
+    QueuedChange { position: [x, 64, 0], seen: name.map(|name| (name.to_string(), 1.5)) }
 }
 
 #[test]

@@ -3,12 +3,13 @@ use std::cell::{Cell, RefCell};
 use alaydriem_stratum::services::WorldKeyReader;
 use alaydriem_stratum::traits::{ClientSource, WorldSource};
 use alaydriem_stratum::types::{ConnectionInfo, PlayerSpot};
+use amml_api::ConnectionKind;
 
 // A game client with fixed answers, changed between reads through the cells. It starts in a world of level 0x1000,
 // named "Level", with no connection info, no storage folder and a player at (10, 64, -20) in the overworld
 pub struct FakeWorld {
     pub active: Cell<bool>,
-    pub level: Cell<Option<usize>>,
+    pub level: Cell<Option<u64>>,
     pub in_realm: Cell<bool>,
     pub connection: RefCell<Option<ConnectionInfo>>,
     pub folder: RefCell<Option<String>>,
@@ -38,14 +39,21 @@ impl FakeWorld {
         }
     }
 
+    // the connection for the game's connection type (0 local, above 0 remote, else other): the resolved host the
+    // loader reads, and `url`, the address the player typed for the server join
     pub fn connection(connection_type: i16, host: &str, url: &str, port: i32) -> ConnectionInfo {
-        ConnectionInfo { connection_type, host: host.to_string(), url: url.to_string(), port }
+        let kind = match connection_type {
+            0 => ConnectionKind::Local,
+            1.. => ConnectionKind::Remote,
+            _ => ConnectionKind::Other,
+        };
+        ConnectionInfo { kind, host: host.to_string(), url: url.to_string(), port: u16::try_from(port).unwrap_or(0) }
     }
 
     // a local world whose storage folder is `folder`, over a local connection
     pub fn local(folder: &str) -> Self {
         let world = Self::new();
-        *world.connection.borrow_mut() = Some(Self::connection(ConnectionInfo::LOCAL, "", "", 0));
+        *world.connection.borrow_mut() = Some(Self::connection(0, "", "", 0));
         *world.folder.borrow_mut() = Some(folder.to_string());
         world
     }
@@ -74,7 +82,7 @@ impl FakeWorld {
 }
 
 impl WorldSource for FakeWorld {
-    fn level(&self) -> Option<usize> {
+    fn level(&self) -> Option<u64> {
         self.level.get()
     }
 

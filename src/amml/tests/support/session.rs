@@ -1,27 +1,37 @@
-use std::path::Path;
 use std::sync::Arc;
 
-use alaydriem_stratum::services::{SharedUi, StratumHandle};
-use amm_client::test_support::{FakeTable, LoggedCall};
+use alaydriem_stratum::services::{FrameRouter, ManagerSession, SharedUi, StratumHandle};
+use amm_client::test_support::{FakeConnection, FakeTable};
+
+use super::LoggedLine;
 use amm_core::structs::event::{KeybindPhase, ModEvent};
+use amml_api::testing::FakeGame;
 use stratum_core::structs::frame::FrameStatus;
 use tempfile::TempDir;
 
-// A live core registered on this thread's fake manager, with its own data folder. Shut down on drop.
+// A live core registered on this thread's fake manager, with its own data folder, and the fake loader its link runs
+// on. Shut down on drop, before the loader.
 pub struct CoreSession {
     pub handle: Option<StratumHandle>,
     pub data: TempDir,
+    pub game: FakeGame,
 }
 
 impl CoreSession {
     pub const WORLD: &'static str = "Survival One";
+    // a key no descriptor passes through: A
+    pub const PROBE_KEY: u16 = 0x41;
     pub const OPEN_KEY: ModEvent = ModEvent::Keybind { action: 0, phase: KeybindPhase::Pressed };
 
     pub fn new() -> Self {
         FakeTable::set_config("");
         let data = TempDir::new().unwrap();
-        let handle = StratumHandle::connect(FakeTable::table(), Path::new(FakeTable::CONFIG_DIR), data.path()).unwrap();
-        Self { handle: Some(handle), data }
+        let shared = StratumHandle::shared_for(data.path());
+        let FakeConnection { link, game } =
+            FakeTable::link_with(ManagerSession::DESCRIPTOR, FrameRouter::new(Arc::clone(&shared)));
+        let input = FakeTable::ctx_of(&game, ManagerSession::DESCRIPTOR).input();
+        let handle = StratumHandle::new(link, shared, data.path(), input);
+        Self { handle: Some(handle), data, game }
     }
 
     // In the overworld of `WORLD`, no menu, feet at (10, 64, -20), render distance 12 chunks.
@@ -76,8 +86,17 @@ impl CoreSession {
         assert_eq!(self.tick(&Self::in_world()), Some(()));
     }
 
-    pub fn logged(fragment: &str) -> Vec<LoggedCall> {
-        FakeTable::with(|state| state.logs.iter().filter(|call| call.message.contains(fragment)).cloned().collect())
+    // Whether a lease of this mod blocks the player's keys: a real key that is not passed through does not reach the
+    // game. The key goes up again at once.
+    pub fn input_held(&self) -> bool {
+        let reached = self.game.real_key(Self::PROBE_KEY, true);
+        self.game.real_key(Self::PROBE_KEY, false);
+        !reached
+    }
+
+    // The mod's log lines whose text holds `fragment`, as `<level> <message> key=value ...`.
+    pub fn logged(&self, fragment: &str) -> Vec<LoggedLine> {
+        self.game.logs().into_iter().filter(|line| line.contains(fragment)).map(LoggedLine::new).collect()
     }
 
     // Shuts the core down now; the data folder stays until the session drops.

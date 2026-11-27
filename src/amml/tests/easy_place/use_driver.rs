@@ -1,209 +1,251 @@
-use std::sync::atomic::Ordering;
+use std::sync::{Arc, Mutex};
 
-use alaydriem_stratum::easy_place::{UseDriver, UseSignals};
+use alaydriem_stratum::easy_place::{UseCycle, UseDriver, UseFlags};
+use alaydriem_stratum::traits::UseCoreHolder;
+use amml_api::amml_abi::{BuildBlock, ClientTick, InventoryRequestDone, UsePressed};
+use amml_api::testing::{FakeClient, FakeGame, FakeInventory, FakeItem};
+use amml_api::{
+    BlockHandle, Cancel, GameType, HookOrder, InventoryMove, InventoryRequestDoneExt, Listener, RequestOptions, Screen,
+    Vec3,
+};
 use stratum_core::structs::block::Face;
-use stratum_core::structs::easy_place::{GameMode, Placement, SwapAnswer, UseCommand};
+use stratum_core::structs::easy_place::{Placement, SwapAnswer, UseCommand};
 
-use crate::support::fake_packet::{DELETE_CALLS, DESTROY_CALLS, READ_OK, SENT_IDS, STREAM_DTOR_CALLS};
-use crate::support::fake_use::{ITEM_DTOR_CALLS, SELECT_TAKES};
-use crate::support::{FakePacket, FakeUse, FakeUseCore};
+use crate::support::{FakeCoreHolder, FakeUseCore, StratumRig};
 
-const PLACE: Placement =
-    Placement { spot: [0, 64, -2], neighbour: [0, 64, -3], face: Face::South, click: [0.5, 0.5, 1.0] };
-const BUILD: &str = "build 0 64 -3 face=3 hand=0 sim=0";
+const STONE: FakeItem = FakeItem { type_name: "minecraft:stone", count: 64, ..FakeItem::EMPTY };
 
-fn lines(lines: &[&str]) -> Vec<String> {
-    lines.iter().map(|line| line.to_string()).collect()
+// a use driver run from the fake client's ticks and use presses with the real use key held, through `UseCycle` as the
+// runtime runs it: decided under the locks, carried out with none held. The request answers go back through
+// `InventoryRequestDone`; each `BuildBlock` the fake raises inside `build_at` records whether both locks were free on
+// that stack
+struct DriverRig {
+    game: FakeGame,
+    core: Arc<Mutex<FakeCoreHolder>>,
+    // per `BuildBlock` on the stack of a build: the core and the driver lock could both be taken
+    free_on_build: Arc<Mutex<Vec<bool>>>,
+    _listeners: Vec<Listener>,
 }
 
-// one tick of a driver over the rig with `core`, at `now`
-#[allow(unsafe_code)]
-fn tick(rig: &FakeUse, driver: &mut UseDriver, signals: &UseSignals, core: &mut FakeUseCore, now: f64) {
-    // SAFETY: the rig's fake client, player and region
-    unsafe { driver.tick(signals, Some(core), &rig.frame(now), &mut FakeUse::palette_block) };
-}
-
-fn driver(rig: &FakeUse) -> UseDriver {
-    UseDriver::new(&rig.packets, &rig.players, &rig.calls)
-}
-
-#[test]
-fn a_use_call_reads_the_probe_the_spot_and_the_inventory_from_the_game() {
-    let rig = FakeUse::new();
-    let (mut driver, signals) = (driver(&rig), UseSignals::new());
-    let mut core = FakeUseCore::new(UseCommand::Vanilla);
-
-    tick(&rig, &mut driver, &signals, &mut core, 1.0);
-
-    let probe = core.probe.expect("the core was asked");
-    assert!(probe.pressed && probe.held);
-    assert_eq!(probe.eye, [0.5, f64::from(65.62f32), 0.5]);
-    let length = (0.25f64 + 1.0).sqrt();
-    assert!((probe.dir[1] + 0.5 / length).abs() < 1e-6 && (probe.dir[2] + 1.0 / length).abs() < 1e-6);
-    assert_eq!(probe.reach, 12.0);
-    assert_eq!(probe.game_mode, GameMode::Creative);
-    assert_eq!(probe.body, Some(([0, 64, 0], [0, 65, 0])));
-    let hit = probe.hit.expect("the ray reaches the stone");
-    assert_eq!((hit.cell, hit.face, hit.replaceable), ([0, 64, -3], Face::South, false));
-    assert_eq!(probe.swap_answer, SwapAnswer::None);
-    // only the stone north of the spot can be placed against
-    assert_eq!(core.world.map(|world| world.against), Some([false, false, true, false, false, false]));
-    assert_eq!(core.slots.len(), 36);
-    assert_eq!((core.slots[0].1, core.slots[9].1, core.slots[1].1), (10, 64, 0));
-}
-
-#[test]
-fn vanilla_leaves_the_use_to_the_game() {
-    let rig = FakeUse::new();
-    let (mut driver, signals) = (driver(&rig), UseSignals::new());
-    let mut core = FakeUseCore::new(UseCommand::Vanilla);
-
-    tick(&rig, &mut driver, &signals, &mut core, 1.0);
-
-    assert_eq!(FakeUse::log(), lines(&["aim", "decide"]));
-    assert!(signals.holding() && !signals.blocking());
-}
-
-#[test]
-fn select_selects_through_the_hud_then_places() {
-    let rig = FakeUse::new();
-    let (mut driver, signals) = (driver(&rig), UseSignals::new());
-    alaydriem_stratum::easy_place::UseExecutor::capture_hud(&signals, rig.hud, 0.9);
-    let mut core = FakeUseCore::new(UseCommand::Select { slot: 3, place: PLACE });
-
-    tick(&rig, &mut driver, &signals, &mut core, 1.0);
-
-    assert_eq!(FakeUse::log(), lines(&["aim", "decide", "select 3", BUILD]));
-    assert_eq!(rig.selected(), 3);
-    assert!(signals.blocking());
-}
-
-#[test]
-fn a_select_the_game_does_not_take_places_nothing_and_is_not_sent() {
-    SELECT_TAKES.store(false, Ordering::SeqCst);
-    let rig = FakeUse::new();
-    let (mut driver, signals) = (driver(&rig), UseSignals::new());
-    alaydriem_stratum::easy_place::UseExecutor::capture_hud(&signals, rig.hud, 0.9);
-    let mut core = FakeUseCore::new(UseCommand::Select { slot: 3, place: PLACE });
-
-    tick(&rig, &mut driver, &signals, &mut core, 1.0);
-
-    assert_eq!(FakeUse::log(), lines(&["aim", "decide", "select 3", "not_sent 0 64 -2"]));
-}
-
-#[test]
-fn swap_sends_the_inventory_open_and_the_request_then_predicts() {
-    let rig = FakeUse::new();
-    let (mut driver, signals) = (driver(&rig), UseSignals::new());
-    let mut core = FakeUseCore::new(UseCommand::Swap { from: 9, to: 0 });
-
-    tick(&rig, &mut driver, &signals, &mut core, 1.0);
-
-    assert_eq!(FakeUse::log(), lines(&["aim", "decide", "swap_slots 0 9"]));
-    assert_eq!(*SENT_IDS.lock().unwrap(), vec![33, 147]);
-}
-
-#[test]
-fn pick_asks_the_palette_and_the_block_s_item_then_sends_and_predicts() {
-    let rig = FakeUse::new();
-    let (mut driver, signals) = (driver(&rig), UseSignals::new());
-    let mut core = FakeUseCore::new(UseCommand::Pick { palette_id: FakeUse::PLANKS_PALETTE_ID, slot: 0 });
-
-    tick(&rig, &mut driver, &signals, &mut core, 1.0);
-
-    assert_eq!(FakeUse::log(), lines(&["aim", "decide", "copy_stack", "set_item 0"]));
-    assert_eq!(*SENT_IDS.lock().unwrap(), vec![33, 147]);
-    assert_eq!(rig.slot(0), (FakeUse::planks(), 64));
-    assert_eq!(FakeUse::count(&ITEM_DTOR_CALLS), 1, "the block's item instance is destroyed once");
-}
-
-#[test]
-fn place_builds_on_the_neighbour_with_the_hit_set_and_puts_the_hit_back() {
-    let rig = FakeUse::new();
-    let (mut driver, signals) = (driver(&rig), UseSignals::new());
-    let mut core = FakeUseCore::new(UseCommand::Place(PLACE));
-
-    tick(&rig, &mut driver, &signals, &mut core, 1.0);
-
-    assert_eq!(FakeUse::log(), lines(&["aim", "decide", BUILD]));
-    // SAFETY: the rig's fake hit result
-    #[allow(unsafe_code)]
-    let hit = unsafe { &*rig.hit };
-    assert_eq!((hit.kind, hit.facing, hit.block.x, hit.pos), (0, 0, 0, [0.0; 3]));
-    assert!(!signals.own_build(), "the own-build guard is down after the build");
-}
-
-#[test]
-fn a_refused_build_is_not_sent() {
-    crate::support::fake_use::BUILD_OK.store(false, Ordering::SeqCst);
-    let rig = FakeUse::new();
-    let (mut driver, signals) = (driver(&rig), UseSignals::new());
-    let mut core = FakeUseCore::new(UseCommand::Place(PLACE));
-
-    tick(&rig, &mut driver, &signals, &mut core, 1.0);
-
-    assert_eq!(FakeUse::log(), lines(&["aim", "decide", BUILD, "not_sent 0 64 -2"]));
-}
-
-#[test]
-fn a_swap_whose_packet_read_fails_is_not_sent_released_once_and_answered_refused() {
-    READ_OK.store(false, Ordering::SeqCst);
-    let rig = FakeUse::new();
-    let (mut driver, signals) = (driver(&rig), UseSignals::new());
-    let mut core = FakeUseCore::new(UseCommand::Swap { from: 9, to: 0 });
-
-    tick(&rig, &mut driver, &signals, &mut core, 1.0);
-
-    // no inventory open, no request and no prediction
-    assert!(SENT_IDS.lock().unwrap().is_empty());
-    assert_eq!(FakeUse::log(), lines(&["aim", "decide"]));
-    assert_eq!(FakePacket::count(&STREAM_DTOR_CALLS), 1);
-    assert_eq!(FakePacket::count(&DESTROY_CALLS), 1);
-    assert_eq!(FakePacket::count(&DELETE_CALLS), 1);
-    assert_eq!(driver.request().answer(), SwapAnswer::Refused);
-    assert_eq!(driver.request().awaited(), 0);
-
-    // the next call goes on as usual
-    tick(&rig, &mut driver, &signals, &mut core, 2.0);
-    assert_eq!(core.probe.map(|probe| probe.swap_answer), Some(SwapAnswer::Refused));
-}
-
-#[test]
-fn a_held_key_calls_once_per_build_delay_or_on_the_answer() {
-    let rig = FakeUse::new();
-    let (mut driver, signals) = (driver(&rig), UseSignals::new());
-    let mut core = FakeUseCore::new(UseCommand::Swap { from: 9, to: 0 });
-    tick(&rig, &mut driver, &signals, &mut core, 1.0);
-    core.command = UseCommand::Vanilla;
-    let id = driver.request().awaited();
-
-    tick(&rig, &mut driver, &signals, &mut core, 1.1);
-    assert_eq!(FakeUse::log().iter().filter(|line| *line == "aim").count(), 1, "the 200 ms delay has not passed");
-
-    driver.request().on_response(FakeUse::response(id, 0, None));
-    tick(&rig, &mut driver, &signals, &mut core, 1.15);
-    assert_eq!(FakeUse::log().iter().filter(|line| *line == "aim").count(), 2, "the answer came");
-    assert!(!core.probe.unwrap().pressed);
-    assert_eq!(core.probe.unwrap().swap_answer, SwapAnswer::Accepted);
-}
-
-#[test]
-fn key_up_tells_the_core_once() {
-    let rig = FakeUse::new();
-    let (mut driver, signals) = (driver(&rig), UseSignals::new());
-    let mut core = FakeUseCore::new(UseCommand::Place(PLACE));
-    tick(&rig, &mut driver, &signals, &mut core, 1.0);
-    let mut frame = rig.frame(1.5);
-    frame.key_held = false;
-
-    for _ in 0..2 {
-        // SAFETY: the rig's fake objects
-        #[allow(unsafe_code)]
-        unsafe {
-            driver.tick(&signals, Some(&mut core), &frame, &mut FakeUse::palette_block)
+impl DriverRig {
+    fn new(game_type: GameType, command: UseCommand, slots: [Option<FakeItem>; 36]) -> Self {
+        let game = FakeGame::new();
+        game.offer::<ClientTick>();
+        game.offer::<InventoryRequestDone>();
+        game.offer::<UsePressed>();
+        game.offer::<BuildBlock>();
+        for area in StratumRig::areas() {
+            game.offer_area(area);
+        }
+        game.open_gate();
+        game.set_epoch(1);
+        game.set_client(FakeClient {
+            game_type: Some(game_type),
+            top_screen: Screen::Hud,
+            head_position: Some(Vec3 { x: 0.5, y: 66.6, z: -1.5 }),
+            view_vector: Some(Vec3 { x: 0.0, y: -1.0, z: 0.0 }),
+            ..StratumRig::client()
+        });
+        game.set_inventory(FakeInventory { selected_slot: Some(0), slots, ..FakeInventory::default() });
+        let core = Arc::new(Mutex::new(FakeCoreHolder { core: FakeUseCore::new(command) }));
+        let driver = Arc::new(Mutex::new(UseDriver::new()));
+        let flags = Arc::new(UseFlags::new());
+        let pick = |command: &UseCommand| {
+            matches!(command, UseCommand::Pick { .. }).then(|| BlockHandle::for_test(StratumRig::STONE))
         };
+        let events = game.ctx().events();
+        let (tick_core, tick_driver, tick_flags) = (Arc::clone(&core), Arc::clone(&driver), Arc::clone(&flags));
+        let tick = events
+            .listen::<ClientTick>(HookOrder::READ_AFTER_WRITERS, move |_, at| {
+                let Some(client) = at.client() else { return };
+                let player = client.local_player();
+                let (command, counts) = {
+                    let mut core = tick_core.lock().unwrap();
+                    let mut driver = tick_driver.lock().unwrap();
+                    (driver.tick(&tick_flags, core.use_core(), player.as_ref(), true, 1.0), driver.counts())
+                };
+                let (Some(command), Some(player)) = (command, player.as_ref()) else { return };
+                UseCycle::carry_out(&tick_core, &tick_driver, player, &client.hud(), &command, pick(&command), &counts);
+            })
+            .unwrap();
+        let (press_core, press_driver) = (Arc::clone(&core), Arc::clone(&driver));
+        let press = events
+            .listen::<UsePressed>(HookOrder::WRITE, move |event, at| {
+                let Some(client) = at.client() else { return };
+                let player = client.local_player();
+                let hud = client.hud();
+                if UseCycle::press(&press_core, &press_driver, &flags, player.as_ref(), &hud, true, 1.0, pick) {
+                    event.cancel();
+                }
+            })
+            .unwrap();
+        let free_on_build = Arc::new(Mutex::new(Vec::new()));
+        let (build_core, build_driver, build_seen) =
+            (Arc::clone(&core), Arc::clone(&driver), Arc::clone(&free_on_build));
+        let build = events
+            .listen::<BuildBlock>(HookOrder::WRITE, move |_, _| {
+                let free = build_core.try_lock().is_ok() && build_driver.try_lock().is_ok();
+                build_seen.lock().unwrap().push(free);
+            })
+            .unwrap();
+        let done_driver = Arc::clone(&driver);
+        let done = events
+            .listen::<InventoryRequestDone>(HookOrder::NORMAL, move |event, _| {
+                done_driver.lock().unwrap().request_done(event.id(), event.outcome());
+            })
+            .unwrap();
+        Self { game, core, free_on_build, _listeners: vec![tick, press, build, done] }
     }
 
-    assert_eq!(FakeUse::log().iter().filter(|line| *line == "released").count(), 1);
-    assert!(!signals.holding() && signals.player() == 0);
+    fn tick(&self) {
+        self.game.raise_with_client(&mut ClientTick { header: FakeGame::header::<ClientTick>() });
+    }
+}
+
+fn slots_with(index: usize, item: FakeItem) -> [Option<FakeItem>; 36] {
+    let mut slots: [Option<FakeItem>; 36] = std::array::from_fn(|_| None);
+    slots[index] = Some(item);
+    slots
+}
+
+#[test]
+fn survival_moves_the_stack_into_an_empty_hotbar_slot_and_the_next_call_sees_the_answer() {
+    let rig = DriverRig::new(GameType::Survival, UseCommand::Swap { from: 12, to: 0 }, slots_with(12, STONE));
+
+    rig.tick();
+
+    let requests = rig.game.requests();
+    assert_eq!(requests.len(), 1);
+    let (id, moves, options) = requests[0].clone();
+    assert_eq!(moves, vec![InventoryMove::Place { from: 12, to: 0, count: 64 }]);
+    assert_eq!(options, RequestOptions { hidden_open: true, predict: true });
+    assert_eq!(rig.core.lock().unwrap().core.slots[12], (b"minecraft:stone".to_vec(), 64));
+
+    rig.game.answer(id, 1);
+    rig.game.frame();
+    rig.tick();
+
+    assert_eq!(rig.core.lock().unwrap().core.probe.map(|probe| probe.swap_answer), Some(SwapAnswer::Accepted));
+}
+
+#[test]
+fn survival_swaps_two_stacks_when_the_hotbar_slot_holds_one() {
+    let mut slots = slots_with(12, STONE);
+    slots[0] = Some(FakeItem { type_name: "minecraft:dirt", count: 3, ..FakeItem::EMPTY });
+    let rig = DriverRig::new(GameType::Survival, UseCommand::Swap { from: 12, to: 0 }, slots);
+
+    rig.tick();
+
+    let requests = rig.game.requests();
+    assert_eq!(requests[0].1, vec![InventoryMove::Swap { a: 12, b: 0 }]);
+}
+
+#[test]
+fn creative_picks_the_palette_block_into_the_hotbar_slot() {
+    let rig = DriverRig::new(GameType::Creative, UseCommand::Pick { palette_id: 0, slot: 3 }, slots_with(12, STONE));
+
+    rig.tick();
+
+    let picks = rig.game.picks();
+    assert_eq!(picks.len(), 1);
+    assert_eq!((picks[0].1, picks[0].2), (BlockHandle::for_test(StratumRig::STONE), 3));
+}
+
+#[test]
+fn a_place_builds_against_the_neighbour_face_at_the_click_point() {
+    let place = Placement { spot: [0, 65, -2], neighbour: [0, 64, -2], face: Face::Up, click: [0.5, 1.0, 0.5] };
+    let rig = DriverRig::new(GameType::Creative, UseCommand::Place(place), slots_with(0, STONE));
+
+    rig.tick();
+
+    assert_eq!(rig.game.builds(), vec!["build_at 0,64,-2 face=up".to_string()]);
+    assert!(rig.core.lock().unwrap().core.log.iter().all(|line| !line.starts_with("not_sent")));
+}
+
+#[test]
+fn a_select_the_game_does_not_take_is_reported_not_sent() {
+    let place = Placement { spot: [0, 65, -2], neighbour: [0, 64, -2], face: Face::Up, click: [0.5, 1.0, 0.5] };
+    // slot 9 is not a hotbar slot, so the select is not made and nothing is built
+    let rig = DriverRig::new(GameType::Creative, UseCommand::Select { slot: 9, place }, slots_with(0, STONE));
+
+    rig.tick();
+
+    assert!(rig.game.builds().is_empty());
+    assert!(rig.core.lock().unwrap().core.log.iter().any(|line| line == "not_sent 0 65 -2"));
+}
+
+#[test]
+fn a_press_that_places_builds_with_no_lock_held_on_the_build_stack_and_cancels_the_game_use() {
+    let place = Placement { spot: [0, 65, -2], neighbour: [0, 64, -2], face: Face::Up, click: [0.5, 1.0, 0.5] };
+    let rig = DriverRig::new(GameType::Creative, UseCommand::Place(place), slots_with(0, STONE));
+
+    let cancelled = rig.game.raise_use_pressed();
+
+    assert!(cancelled);
+    assert_eq!(rig.game.builds(), vec!["build_at 0,64,-2 face=up".to_string()]);
+    assert_eq!(*rig.free_on_build.lock().unwrap(), vec![true], "BuildBlock on the build stack takes both locks");
+}
+
+#[test]
+fn a_tick_that_places_builds_with_no_lock_held_on_the_build_stack() {
+    let place = Placement { spot: [0, 65, -2], neighbour: [0, 64, -2], face: Face::Up, click: [0.5, 1.0, 0.5] };
+    let rig = DriverRig::new(GameType::Creative, UseCommand::Place(place), slots_with(0, STONE));
+
+    rig.tick();
+
+    assert_eq!(*rig.free_on_build.lock().unwrap(), vec![true]);
+}
+
+#[test]
+fn a_press_while_the_core_is_held_goes_to_the_game() {
+    let place = Placement { spot: [0, 65, -2], neighbour: [0, 64, -2], face: Face::Up, click: [0.5, 1.0, 0.5] };
+    let rig = DriverRig::new(GameType::Creative, UseCommand::Place(place), slots_with(0, STONE));
+    let held = rig.core.lock().unwrap();
+
+    let cancelled = rig.game.raise_use_pressed();
+
+    drop(held);
+    assert!(!cancelled);
+    assert!(rig.game.builds().is_empty());
+}
+
+#[test]
+fn a_build_delay_the_loader_cannot_read_falls_back_to_the_game_default_not_to_none() {
+    let place = Placement { spot: [0, 65, -2], neighbour: [0, 64, -2], face: Face::Up, click: [0.5, 1.0, 0.5] };
+    let rig = DriverRig::new(GameType::Creative, UseCommand::Place(place), slots_with(0, STONE));
+    rig.game.set_client(FakeClient {
+        game_type: Some(GameType::Creative),
+        top_screen: Screen::Hud,
+        build_delay: None,
+        ..StratumRig::client()
+    });
+
+    rig.tick();
+    rig.tick();
+
+    assert_eq!(rig.game.builds().len(), 1, "the second tick at the same time is not due");
+}
+
+#[test]
+fn with_no_block_on_the_walk_the_game_hit_result_is_the_hit() {
+    use amml_api::{BlockHit, BlockPos, Face as ApiFace, HitResult};
+    let rig = DriverRig::new(GameType::Creative, UseCommand::Vanilla, slots_with(0, STONE));
+    let hit =
+        BlockHit { pos: BlockPos { x: 0, y: 64, z: -2 }, point: Vec3 { x: 0.5, y: 65.0, z: -1.5 }, face: ApiFace::Up };
+    rig.game.set_client(FakeClient {
+        game_type: Some(GameType::Creative),
+        top_screen: Screen::Hud,
+        head_position: Some(Vec3 { x: 0.5, y: 66.6, z: -1.5 }),
+        view_vector: Some(Vec3 { x: 0.0, y: -1.0, z: 0.0 }),
+        hit_result: Some(HitResult::Block(hit)),
+        ..StratumRig::client()
+    });
+
+    rig.tick();
+
+    let probe = rig.core.lock().unwrap().core.probe.unwrap();
+    let found = probe.hit.expect("the game's hit is used");
+    assert_eq!((found.cell, found.face), ([0, 64, -2], Face::Up));
+    assert!((found.distance - 1.6).abs() < 1e-3, "{}", found.distance);
+    assert!(found.replaceable, "air at the hit cell can be built over");
 }

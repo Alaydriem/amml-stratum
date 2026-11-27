@@ -1,11 +1,8 @@
-// What the kinds scan reads of the world's blocks
+use amml_api::{ApiError, BlockPos, KindsInBox};
+
+// What the kinds scan reads of the world's blocks: the distinct block types of one box, as the game names them
 pub trait BlockGrid {
-    // whether the chunk at the chunk coordinates is loaded
-    fn chunk_loaded(&self, chunk_x: i32, chunk_z: i32) -> bool;
-
-    // the block type of the cell, as a number that tells types apart; None when the block reads null
-    fn kind_at(&self, cell: [i32; 3]) -> Option<usize>;
-
-    // the full name of a block type from `kind_at`; None when it cannot be read
-    fn kind_name(&self, kind: usize) -> Option<String>;
+    // the kinds of the box from `min` to `max`, both included; the box holds at most `BlockSource::KINDS_CELL_CAP`
+    // cells
+    fn kinds_in(&self, min: BlockPos, max: BlockPos, max_kinds: u32) -> Result<KindsInBox, ApiError>;
 }

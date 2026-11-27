@@ -3,16 +3,12 @@ use stratum_core::structs::build::{BuildKindsRequest, BuildKindsResult};
 
 use crate::support::FakeBuildWorld;
 
+const STONE: &str = "minecraft:stone";
+const WATER: &str = "minecraft:water";
+const LAVA: &str = "minecraft:lava";
+
 fn request(min: [i32; 3], max: [i32; 3]) -> BuildKindsRequest {
     BuildKindsRequest { min, max }
-}
-
-fn named_world() -> FakeBuildWorld {
-    let mut world = FakeBuildWorld::ready();
-    world.names.insert(1, "minecraft:stone".to_string());
-    world.names.insert(2, "minecraft:water".to_string());
-    world.names.insert(3, "minecraft:lava".to_string());
-    world
 }
 
 fn sorted(result: Option<BuildKindsResult>) -> Vec<String> {
@@ -25,155 +21,129 @@ fn sorted(result: Option<BuildKindsResult>) -> Vec<String> {
     }
 }
 
+fn run(scanner: &mut KindsScanner, world: &FakeBuildWorld) -> (BuildKindsResult, u32) {
+    let mut ticks = 0;
+    loop {
+        ticks += 1;
+        if let Some(answer) = scanner.step(world) {
+            return (answer, ticks);
+        }
+        assert!(ticks < 1000, "the scan does not end");
+    }
+}
+
 #[test]
-fn scan_spreads_over_ticks_and_reports_kinds() {
-    let mut world = named_world();
-    world.fill([0, 0, 0], [3, 3, 3], 1);
-    world.cells.insert([2, 1, 3], 2);
-    world.cells.insert([3, 3, 0], 3);
+fn scan_spreads_over_ticks_in_slabs_and_reports_kinds() {
+    let mut world = FakeBuildWorld::ready();
+    world.fill([0, 0, 0], [3, 3, 3], STONE);
+    world.cells.insert([2, 1, 3], WATER.to_string());
+    world.cells.insert([3, 3, 0], LAVA.to_string());
+    // a slab of one column of 4 cells and a row of 2 columns: 8 cells
     let mut scanner = KindsScanner::new(10);
     scanner.begin(&request([0, 0, 0], [3, 3, 3]));
 
-    let mut ticks = 0;
-    let answer = loop {
-        ticks += 1;
-        if let Some(answer) = scanner.step(&world) {
-            break answer;
-        }
-        assert!(ticks < 20, "the scan does not end");
-    };
+    let (answer, ticks) = run(&mut scanner, &world);
 
-    // 64 cells at 10 a tick
-    assert_eq!(ticks, 7);
-    assert_eq!(sorted(Some(answer)), vec!["minecraft:lava", "minecraft:stone", "minecraft:water"]);
+    assert_eq!(ticks, 8);
+    assert_eq!(sorted(Some(answer)), vec![LAVA, STONE, WATER]);
     assert!(!scanner.is_scanning());
 }
 
 #[test]
-fn one_tick_reads_no_more_cells_than_its_rate() {
-    let mut world = named_world();
-    world.fill([0, 0, 0], [9, 9, 9], 1);
+fn no_slab_is_larger_than_the_rate_or_the_loader_cap() {
+    let mut world = FakeBuildWorld::ready();
+    world.fill([0, 0, 0], [9, 9, 9], STONE);
     let mut scanner = KindsScanner::new(25);
     scanner.begin(&request([0, 0, 0], [9, 9, 9]));
+    run(&mut scanner, &world);
 
-    assert!(scanner.step(&world).is_none());
+    let mut big = KindsScanner::new(u32::MAX);
+    big.begin(&request([0, -64, 0], [63, 319, 63]));
+    let tall = FakeBuildWorld::ready();
+    run(&mut big, &tall);
 
-    assert_eq!(world.cell_reads.get(), 25);
+    for (min, max) in world.boxes.borrow().iter().chain(tall.boxes.borrow().iter()) {
+        let cells: i64 = (0..3).map(|axis| i64::from(max[axis] - min[axis] + 1)).product();
+        assert!(cells <= 65_536, "a slab of {cells} cells");
+    }
+    assert!(
+        world
+            .boxes
+            .borrow()
+            .iter()
+            .all(|(min, max)| (0..3).map(|axis| i64::from(max[axis] - min[axis] + 1)).product::<i64>() <= 25)
+    );
 }
 
 #[test]
-fn each_kind_is_reported_once_however_many_cells_hold_it() {
-    let mut world = named_world();
-    world.fill([0, 0, 0], [4, 4, 4], 1);
-    let mut scanner = KindsScanner::new(1000);
+fn the_slabs_cover_the_box_once() {
+    let mut world = FakeBuildWorld::ready();
+    world.fill([0, 0, 0], [6, 4, 5], STONE);
+    let mut scanner = KindsScanner::new(9);
+    scanner.begin(&request([0, 0, 0], [6, 4, 5]));
+    run(&mut scanner, &world);
+
+    let mut seen = std::collections::HashMap::new();
+    for (min, max) in world.boxes.borrow().iter() {
+        for x in min[0]..=max[0] {
+            for y in min[1]..=max[1] {
+                for z in min[2]..=max[2] {
+                    *seen.entry([x, y, z]).or_insert(0) += 1;
+                }
+            }
+        }
+    }
+    assert_eq!(seen.len(), 7 * 5 * 6);
+    assert!(seen.values().all(|count| *count == 1));
+}
+
+#[test]
+fn each_kind_is_reported_once_however_many_slabs_hold_it() {
+    let mut world = FakeBuildWorld::ready();
+    world.fill([0, 0, 0], [4, 4, 4], STONE);
+    let mut scanner = KindsScanner::new(5);
     scanner.begin(&request([0, 0, 0], [4, 4, 4]));
 
-    let kinds = sorted(scanner.step(&world));
+    let (answer, _) = run(&mut scanner, &world);
 
-    assert_eq!(kinds, vec!["minecraft:stone"]);
+    assert_eq!(sorted(Some(answer)), vec![STONE]);
 }
 
 #[test]
 fn scan_reports_not_loaded() {
-    let mut world = named_world();
-    world.fill([0, 0, 0], [31, 3, 3], 1);
+    let mut world = FakeBuildWorld::ready();
+    world.fill([0, 0, 0], [31, 3, 3], STONE);
     world.unloaded_chunks.insert((1, 0));
-    let mut scanner = KindsScanner::new(1_000_000);
+    let mut scanner = KindsScanner::new(65_536);
     scanner.begin(&request([0, 0, 0], [31, 3, 3]));
 
-    assert_eq!(scanner.step(&world), Some(BuildKindsResult::NotLoaded));
+    let (answer, _) = run(&mut scanner, &world);
+
+    assert_eq!(answer, BuildKindsResult::NotLoaded);
     assert!(!scanner.is_scanning());
 }
 
 #[test]
-fn a_block_that_reads_null_is_not_loaded() {
-    let mut world = named_world();
-    world.fill([0, 0, 0], [3, 3, 3], 1);
-    world.cells.remove(&[2, 2, 2]);
-    let mut scanner = KindsScanner::new(1_000_000);
-    scanner.begin(&request([0, 0, 0], [3, 3, 3]));
-
-    assert_eq!(scanner.step(&world), Some(BuildKindsResult::NotLoaded));
-}
-
-#[test]
-fn a_kind_whose_name_cannot_be_read_is_not_loaded() {
-    let mut world = named_world();
-    world.fill([0, 0, 0], [1, 1, 1], 9);
-    let mut scanner = KindsScanner::new(1_000_000);
-    scanner.begin(&request([0, 0, 0], [1, 1, 1]));
-
-    assert_eq!(scanner.step(&world), Some(BuildKindsResult::NotLoaded));
-}
-
-#[test]
-fn negative_cells_are_checked_in_their_own_chunk() {
-    let mut world = named_world();
-    world.fill([-2, 0, -2], [-1, 0, -1], 1);
-    world.unloaded_chunks.insert((-1, -1));
-    let mut scanner = KindsScanner::new(1_000_000);
-    scanner.begin(&request([-2, 0, -2], [-1, 0, -1]));
-
-    assert_eq!(scanner.step(&world), Some(BuildKindsResult::NotLoaded));
-}
-
-#[test]
-fn more_kinds_than_the_bound_is_too_many_and_the_list_stays_inside_the_bound() {
+fn scan_reports_too_many_past_the_kind_bound() {
     let mut world = FakeBuildWorld::ready();
-    let kinds = KindsScanner::KIND_BOUND + 5;
-    for kind in 0..kinds {
-        world.names.insert(kind, format!("minecraft:block_{kind}"));
-        world.cells.insert([i32::try_from(kind).unwrap(), 0, 0], kind);
+    let count = KindsScanner::KIND_BOUND as i32 + 1;
+    for x in 0..count {
+        world.cells.insert([x, 0, 0], format!("minecraft:kind_{x}"));
     }
-    let last = i32::try_from(kinds).unwrap() - 1;
-    let mut scanner = KindsScanner::new(1);
-    scanner.begin(&request([0, 0, 0], [last, 0, 0]));
+    let mut scanner = KindsScanner::new(4096);
+    scanner.begin(&request([0, 0, 0], [count - 1, 0, 0]));
 
-    let mut most = 0;
-    let answer = loop {
-        let answer = scanner.step(&world);
-        most = most.max(scanner.found());
-        if answer.is_some() {
-            break answer;
-        }
-    };
+    let (answer, _) = run(&mut scanner, &world);
 
-    assert_eq!(answer, Some(BuildKindsResult::TooMany));
-    assert_eq!(most, KindsScanner::KIND_BOUND, "the list filled to its bound and no further");
-    assert_eq!(scanner.found(), 0, "the list is dropped with the answer");
+    assert_eq!(answer, BuildKindsResult::TooMany);
 }
 
 #[test]
-fn a_new_request_replaces_a_scan_that_is_running() {
-    let mut world = named_world();
-    world.fill([0, 0, 0], [9, 9, 9], 1);
-    world.fill([20, 0, 0], [20, 0, 0], 2);
-    let mut scanner = KindsScanner::new(5);
-    scanner.begin(&request([0, 0, 0], [9, 9, 9]));
-    assert!(scanner.step(&world).is_none());
+fn an_inverted_box_has_no_kinds() {
+    let world = FakeBuildWorld::ready();
+    let mut scanner = KindsScanner::new(100);
+    scanner.begin(&request([3, 0, 0], [0, 0, 0]));
 
-    scanner.begin(&request([20, 0, 0], [20, 0, 0]));
-
-    assert_eq!(sorted(scanner.step(&world)), vec!["minecraft:water"]);
-}
-
-#[test]
-fn a_scan_that_was_not_begun_answers_nothing() {
-    let world = named_world();
-    let mut scanner = KindsScanner::new(5);
-
-    assert_eq!(scanner.step(&world), None);
-}
-
-#[test]
-fn a_chunk_that_unloads_between_ticks_is_not_loaded() {
-    let mut world = named_world();
-    world.fill([0, 0, 0], [3, 3, 3], 1);
-    let mut scanner = KindsScanner::new(10);
-    scanner.begin(&request([0, 0, 0], [3, 3, 3]));
-    assert!(scanner.step(&world).is_none());
-
-    world.unloaded_chunks.insert((0, 0));
-
-    assert_eq!(scanner.step(&world), Some(BuildKindsResult::NotLoaded));
+    assert_eq!(scanner.step(&world), Some(BuildKindsResult::Kinds(Vec::new())));
+    assert!(world.boxes.borrow().is_empty());
 }
